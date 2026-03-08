@@ -1,14 +1,14 @@
 # Tianchi News Recommendation
 
-A clean, modular baseline framework for the [Tianchi News Recommendation competition](https://tianchi.aliyun.com/competition/entrance/531842/introduction).
+A clean, baseline-first framework for the [Tianchi News Recommendation competition](https://tianchi.aliyun.com/competition/entrance/531842/introduction).
 
 ## Overview
 
-The task is to predict the next article a user will click based on their historical reading behaviour.  
-The official metric is **MRR@5** (Mean Reciprocal Rank at top-5).
+The task is to predict the next article a user will click based on historical behaviour.
+This repo now focuses on a simple **ItemCF recall baseline** that directly produces a submission file.
 
 ```
-Raw data  ──►  Data processing  ──►  Recall  ──►  Feature engineering  ──►  LightGBM rank  ──►  Submission
+Raw data  ──►  User history build  ──►  ItemCF recall  ──►  Hot-item fill  ──►  Submission
 ```
 
 ## Project Structure
@@ -17,14 +17,12 @@ Raw data  ──►  Data processing  ──►  Recall  ──►  Feature engi
 .
 ├── src/
 │   ├── __init__.py
+│   ├── main.py                # Unified baseline entrypoint
+│   ├── baseline_itemcf.py     # ItemCF baseline pipeline
 │   ├── utils.py               # Logging, timing, pickle helpers
 │   ├── data_processing.py     # Load CSVs, split history / label
-│   ├── feature_engineering.py # User & candidate feature extraction
-│   ├── recall.py              # ItemCF, UserCF, BPR, ensemble merge
-│   ├── rank.py                # LightGBM ranker + training-sample builder
-│   └── evaluate.py            # MRR@k, Hit@k, NDCG@k, submission export
-├── tests/                     # pytest unit tests (31 tests)
-├── main.py                    # End-to-end CLI pipeline
+│   ├── recall.py              # ItemCF implementation (+ optional UserCF/BPR)
+│   └── evaluate.py            # Submission export and metrics helpers
 ├── requirements.txt
 └── README.md
 ```
@@ -39,35 +37,21 @@ pip install -r requirements.txt
 
 ### 2. Prepare data
 
-Download the competition data and place the files under `data/`:
+Place the competition data under `tcdata/` (or your custom `--data_dir`):
 
 | File | Description |
 |------|-------------|
-| `data/train_click_log.csv` | Training user click logs |
-| `data/testA_click_log.csv` | Test user click logs |
-| `data/articles.csv` | Article meta-data (category, word count, ...) |
+| `tcdata/train_click_log.csv` | Training user click logs |
+| `tcdata/testA_click_log.csv` | Test user click logs |
+| `tcdata/articles.csv` | Article meta-data (optional for baseline) |
 
-### 3. Train
-
-```bash
-python main.py --data_dir data/ --output_dir output/ --mode train
-```
-
-This will:
-1. Load training data and split off the last click per user as a label.
-2. Run **ItemCF** and **UserCF** recall (top-50 candidates per user).
-3. Build user-level and candidate-level features.
-4. Train a **LightGBM** binary classifier (click / no-click).
-5. Evaluate MRR@5, Hit@5, NDCG@5 on the held-out last-click split.
-6. Save the trained ranker to `output/ranker.pkl`.
-
-### 4. Generate submission
+### 3. Run baseline submission
 
 ```bash
-python main.py --data_dir data/ --output_dir output/ --mode predict
+python -m src.main --data_dir tcdata --output_dir output
 ```
 
-Saves `output/submission.csv` in the competition format.
+Saves `output/submission_itemcf_baseline.csv`.
 
 ## Module Reference
 
@@ -80,13 +64,6 @@ Saves `output/submission.csv` in the competition format.
 | `BPR` | Bayesian Personalised Ranking (SGD, latent factor model) |
 | `merge_recall_results()` | Weighted merge of multiple recall dicts |
 
-### `src.rank`
-
-| Symbol | Description |
-|--------|-------------|
-| `LGBRanker` | Pointwise LightGBM classifier used as a ranker |
-| `build_training_samples()` | Attach labels + down-sample negatives |
-
 ### `src.evaluate`
 
 | Function | Description |
@@ -94,30 +71,24 @@ Saves `output/submission.csv` in the competition format.
 | `evaluate()` | MRR@k, Hit@k, NDCG@k across all users |
 | `make_submission()` | Wide-format submission DataFrame |
 
-## Running Tests
-
-```bash
-python -m pytest tests/ -v
-```
-
 ## CLI Options
 
 ```
-python main.py [-h] [--data_dir DATA_DIR] [--output_dir OUTPUT_DIR]
-               [--mode {train,predict}]
+python -m src.main [-h] [--data_dir DATA_DIR] [--output_dir OUTPUT_DIR]
                [--topk_recall TOPK_RECALL]
                [--topk_submit TOPK_SUBMIT]
-               [--n_epochs_bpr N_EPOCHS_BPR]
+               [--topk_sim TOPK_SIM]
+               [--popular_fill_k POPULAR_FILL_K]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--data_dir` | `data/` | Directory with raw CSV files |
+| `--data_dir` | `tcdata` | Directory with raw CSV files |
 | `--output_dir` | `output/` | Output artefacts directory |
-| `--mode` | `train` | `train` or `predict` |
 | `--topk_recall` | `50` | Recall candidates per user |
 | `--topk_submit` | `5` | Articles per user in submission |
-| `--n_epochs_bpr` | `0` | BPR training epochs (0 = skip) |
+| `--topk_sim` | `20` | Similar items kept per clicked item |
+| `--popular_fill_k` | `200` | Hot-item pool size for recall fallback |
 
 ## License
 

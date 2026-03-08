@@ -23,9 +23,12 @@ articles_emb:
 import os
 import pandas as pd
 
-from .utils import get_logger, timer
+try:
+  from .utils import get_logger, timer
+except ImportError:  # support: python data_processing.py
+  from utils import get_logger, timer
 
-logger = get_logger(__name__)
+logger = get_logger(__name__, source_file=__file__)
 
 
 @timer
@@ -97,3 +100,22 @@ def load_dataset(data_dir: str):
     test_df = load_click_log(test_path)
     articles_df = load_articles(articles_path)
     return train_df, test_df, articles_df
+
+
+def main(data_dir: str | None = None):
+  """Simple smoke test for this module."""
+  if data_dir is None:
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(project_root, "tcdata")
+
+  train_df, test_df, articles_df = load_dataset(data_dir)
+  hist_df, label_df = split_last_click(train_df)
+  train_history = build_user_click_history(hist_df)
+
+  logger.info("Smoke test passed.")
+  logger.info("train_df=%s test_df=%s articles_df=%s", train_df.shape, test_df.shape, articles_df.shape)
+  logger.info("hist_df=%s label_df=%s users_in_history=%d", hist_df.shape, label_df.shape, len(train_history))
+
+
+if __name__ == "__main__":
+    main()

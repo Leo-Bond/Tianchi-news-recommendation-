@@ -20,7 +20,7 @@ env/
 notebooks/.ipynb_checkpoints/
 
 # Project artefacts and data (not to be committed)
-data/
+tcdata/
 output/
 *.pkl
 *.csv
@@ -33,3 +33,5 @@ output/
 
 # macOS metadata
 .DS_Store
+
+
