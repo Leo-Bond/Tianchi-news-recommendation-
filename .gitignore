@@ -1,0 +1,35 @@
+# Python byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / build
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Project artefacts and data (not to be committed)
+data/
+output/
+*.pkl
+*.csv
+*.npy
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# macOS metadata
+.DS_Store
