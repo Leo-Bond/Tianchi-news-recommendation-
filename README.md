@@ -53,6 +53,14 @@ python -m src.main --data_dir tcdata --output_dir output
 
 Saves `output/submission_itemcf_baseline.csv`.
 
+### 4. Offline test on train (leave-one-out)
+
+```bash
+python -m src.offline_eval --data_dir tcdata --k 5
+```
+
+This uses `train_click_log.csv` only: for each user, the last click is treated as label and the earlier clicks are used as history.
+
 ## Module Reference
 
 ### `src.recall`

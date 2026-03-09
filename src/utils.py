@@ -8,7 +8,7 @@ import inspect
 from functools import wraps
 
 
-def _resolve_log_stem(name: str, source_file: str | None = None) -> str:
+def _resolve_log_stem(name, source_file=None):
     if source_file:
         return os.path.splitext(os.path.basename(source_file))[0]
 
@@ -24,19 +24,20 @@ def _resolve_log_stem(name: str, source_file: str | None = None) -> str:
     return "app"
 
 
-def _default_log_file(name: str, source_file: str | None = None) -> str:
+def _default_log_file(name, source_file=None):
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     log_dir = os.path.join(project_root, "output", "log")
-    os.makedirs(log_dir, exist_ok=True)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
     log_stem = _resolve_log_stem(name, source_file=source_file)
-    return os.path.join(log_dir, f"{log_stem}.log")
+    return os.path.join(log_dir, "{}.log".format(log_stem))
 
 
-def _has_stream_handler(logger: logging.Logger) -> bool:
+def _has_stream_handler(logger):
     return any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in logger.handlers)
 
 
-def _has_file_handler(logger: logging.Logger, file_path: str) -> bool:
+def _has_file_handler(logger, file_path):
     target = os.path.abspath(file_path)
     for handler in logger.handlers:
         if isinstance(handler, logging.FileHandler):
@@ -45,7 +46,7 @@ def _has_file_handler(logger: logging.Logger, file_path: str) -> bool:
     return False
 
 
-def get_logger(name: str, level: int = logging.INFO, source_file: str | None = None) -> logging.Logger:
+def get_logger(name, level=logging.INFO, source_file=None):
     """Return a logger that writes to stdout and output/log/<module>.log."""
     if source_file is None and (not name or name == "__main__"):
         frame = inspect.currentframe()
@@ -91,14 +92,16 @@ def timer(func):
     return wrapper
 
 
-def save_pickle(obj, path: str) -> None:
+def save_pickle(obj, path):
     """Pickle *obj* to *path*, creating parent directories as needed."""
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    parent_dir = os.path.dirname(os.path.abspath(path))
+    if not os.path.exists(parent_dir):
+        os.makedirs(parent_dir)
     with open(path, "wb") as f:
         pickle.dump(obj, f)
 
 
-def load_pickle(path: str):
+def load_pickle(path):
     """Load and return a pickled object from *path*."""
     with open(path, "rb") as f:
         return pickle.load(f)

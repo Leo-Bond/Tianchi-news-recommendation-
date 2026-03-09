@@ -32,7 +32,7 @@ logger = get_logger(__name__, source_file=__file__)
 
 
 @timer
-def load_click_log(path: str) -> pd.DataFrame:
+def load_click_log(path):
     """Load a click-log CSV and return a sorted DataFrame."""
     df = pd.read_csv(path)
     df.sort_values(["user_id", "click_timestamp"], inplace=True)
@@ -42,7 +42,7 @@ def load_click_log(path: str) -> pd.DataFrame:
 
 
 @timer
-def load_articles(path: str) -> pd.DataFrame:
+def load_articles(path):
     """Load the article meta-data CSV."""
     df = pd.read_csv(path)
     logger.info("Loaded articles: %s  shape=%s", path, df.shape)
@@ -50,14 +50,14 @@ def load_articles(path: str) -> pd.DataFrame:
 
 
 @timer
-def load_article_embeddings(path: str) -> pd.DataFrame:
+def load_article_embeddings(path):
     """Load pre-computed article embeddings CSV."""
     df = pd.read_csv(path)
     logger.info("Loaded embeddings: %s  shape=%s", path, df.shape)
     return df
 
 
-def build_user_click_history(click_df: pd.DataFrame) -> dict:
+def build_user_click_history(click_df):
     """Return a mapping {user_id -> list of article_ids} ordered by click time.
 
     The list is ordered from *earliest* to *latest* click.
@@ -70,7 +70,7 @@ def build_user_click_history(click_df: pd.DataFrame) -> dict:
     return history
 
 
-def split_last_click(click_df: pd.DataFrame):
+def split_last_click(click_df):
     """Split click log into history (all but last click) and labels (last click).
 
     Returns
@@ -85,7 +85,7 @@ def split_last_click(click_df: pd.DataFrame):
     return hist_df, label_df
 
 
-def load_dataset(data_dir: str):
+def load_dataset(data_dir):
     """Convenience function: load all raw files from *data_dir*.
 
     Returns
@@ -102,7 +102,7 @@ def load_dataset(data_dir: str):
     return train_df, test_df, articles_df
 
 
-def main(data_dir: str | None = None):
+def main(data_dir=None):
   """Simple smoke test for this module."""
   if data_dir is None:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

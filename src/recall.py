@@ -10,11 +10,8 @@ Each strategy exposes a ``recall(user_id, topk)`` method and returns a list of
 ``(article_id, score)`` pairs sorted by score (descending).
 """
 
-from __future__ import annotations
-
 import math
 from collections import defaultdict
-from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -22,7 +19,7 @@ from .utils import get_logger, timer
 
 logger = get_logger(__name__)
 
-RecallResult = List[Tuple[int, float]]
+RecallResult = list
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +34,7 @@ class ItemCF:
     many Tianchi baselines.
     """
 
-    def __init__(self, topk_sim: int = 10):
+    def __init__(self, topk_sim=10):
         """
         Parameters
         ----------
@@ -45,11 +42,11 @@ class ItemCF:
             Number of most-similar items to keep per item.
         """
         self.topk_sim = topk_sim
-        self.item_sim: Dict[int, Dict[int, float]] = {}
-        self.user_history: Dict[int, List[int]] = {}
+        self.item_sim = {}
+        self.user_history = {}
 
     @timer
-    def fit(self, click_history: Dict[int, List[int]]) -> "ItemCF":
+    def fit(self, click_history):
         """Compute item–item similarity from click histories.
 
         Parameters
@@ -60,8 +57,8 @@ class ItemCF:
         self.user_history = click_history
 
         # co-click count matrix (sparse, stored as nested dict)
-        item_user_count: Dict[int, int] = defaultdict(int)
-        co_count: Dict[int, Dict[int, float]] = defaultdict(lambda: defaultdict(float))
+        item_user_count = defaultdict(int)
+        co_count = defaultdict(lambda: defaultdict(float))
 
         for user_id, items in click_history.items():
             n = len(items)
@@ -93,13 +90,13 @@ class ItemCF:
         logger.info("ItemCF: built similarity for %d items", len(self.item_sim))
         return self
 
-    def recall(self, user_id: int, topk: int = 50) -> RecallResult:
+    def recall(self, user_id, topk=50):
         """Return top-*k* article candidates for *user_id*."""
         history = self.user_history.get(user_id, [])
         if not history:
             return []
 
-        scores: Dict[int, float] = defaultdict(float)
+        scores = defaultdict(float)
         history_set = set(history)
         n = len(history)
 
@@ -125,23 +122,23 @@ class UserCF:
     recommends articles they clicked that the target user has not seen.
     """
 
-    def __init__(self, topk_users: int = 20):
+    def __init__(self, topk_users=20):
         self.topk_users = topk_users
-        self.user_sim: Dict[int, Dict[int, float]] = {}
-        self.user_history: Dict[int, List[int]] = {}
+        self.user_sim = {}
+        self.user_history = {}
 
     @timer
-    def fit(self, click_history: Dict[int, List[int]]) -> "UserCF":
+    def fit(self, click_history):
         """Compute user–user similarity."""
         self.user_history = click_history
 
-        item_users: Dict[int, List[int]] = defaultdict(list)
+        item_users = defaultdict(list)
         for user_id, items in click_history.items():
             for item in items:
                 item_users[item].append(user_id)
 
         user_click_count = {u: len(items) for u, items in click_history.items()}
-        co_count: Dict[int, Dict[int, float]] = defaultdict(lambda: defaultdict(float))
+        co_count = defaultdict(lambda: defaultdict(float))
 
         for item, users in item_users.items():
             iif_weight = 1.0 / math.log(1 + len(users))  # inverse item frequency
@@ -166,10 +163,10 @@ class UserCF:
         logger.info("UserCF: built similarity for %d users", len(self.user_sim))
         return self
 
-    def recall(self, user_id: int, topk: int = 50) -> RecallResult:
+    def recall(self, user_id, topk=50):
         """Return top-*k* article candidates for *user_id*."""
         history_set = set(self.user_history.get(user_id, []))
-        scores: Dict[int, float] = defaultdict(float)
+        scores = defaultdict(float)
 
         for sim_user, sim_score in self.user_sim.get(user_id, {}).items():
             for item in self.user_history.get(sim_user, []):
@@ -194,11 +191,11 @@ class BPR:
 
     def __init__(
         self,
-        n_factors: int = 32,
-        n_epochs: int = 20,
-        lr: float = 0.01,
-        reg: float = 0.001,
-        seed: int = 42,
+        n_factors=32,
+        n_epochs=20,
+        lr=0.01,
+        reg=0.001,
+        seed=42,
     ):
         self.n_factors = n_factors
         self.n_epochs = n_epochs
@@ -206,17 +203,17 @@ class BPR:
         self.reg = reg
         self.seed = seed
 
-        self.user_factors: np.ndarray | None = None
-        self.item_factors: np.ndarray | None = None
-        self._user_index: Dict[int, int] = {}
-        self._item_index: Dict[int, int] = {}
-        self.user_history: Dict[int, List[int]] = {}
+        self.user_factors = None
+        self.item_factors = None
+        self._user_index = {}
+        self._item_index = {}
+        self.user_history = {}
 
     @timer
-    def fit(self, click_history: Dict[int, List[int]]) -> "BPR":
+    def fit(self, click_history):
         """Train BPR on *click_history*."""
         self.user_history = click_history
-        rng = np.random.default_rng(self.seed)
+        rng = np.random.RandomState(self.seed)
 
         users = list(click_history.keys())
         items = sorted({item for items in click_history.values() for item in items})
@@ -240,11 +237,11 @@ class BPR:
                 if not pos_list:
                     continue
                 # sample a positive item
-                pos_idx = pos_list[rng.integers(len(pos_list))]
+                pos_idx = pos_list[rng.randint(len(pos_list))]
                 # sample a negative item (not in positive set)
-                neg_idx = rng.integers(n_items)
+                neg_idx = rng.randint(n_items)
                 while neg_idx in pos_list:
-                    neg_idx = rng.integers(n_items)
+                    neg_idx = rng.randint(n_items)
 
                 u_vec = self.user_factors[u_idx]
                 p_vec = self.item_factors[pos_idx]
@@ -264,7 +261,7 @@ class BPR:
 
         return self
 
-    def recall(self, user_id: int, topk: int = 50) -> RecallResult:
+    def recall(self, user_id, topk=50):
         """Return top-*k* article candidates for *user_id*."""
         if user_id not in self._user_index:
             return []
@@ -300,10 +297,7 @@ class BPR:
 # Ensemble helper
 # ---------------------------------------------------------------------------
 
-def merge_recall_results(
-    results_list: List[Dict[int, RecallResult]],
-    weights: List[float] | None = None,
-) -> Dict[int, RecallResult]:
+def merge_recall_results(results_list, weights=None):
     """Merge recall results from multiple strategies.
 
     Scores are linearly combined (weighted sum) after min-max normalisation
@@ -328,7 +322,7 @@ def merge_recall_results(
     for r in results_list:
         all_users |= set(r.keys())
 
-    merged: Dict[int, Dict[int, float]] = defaultdict(lambda: defaultdict(float))
+    merged = defaultdict(lambda: defaultdict(float))
 
     for weight, result in zip(weights, results_list):
         for user_id, candidates in result.items():

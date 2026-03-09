@@ -5,11 +5,8 @@ Usage
 python -m src.baseline_itemcf --data_dir tcdata --output_dir output
 """
 
-from __future__ import annotations
-
 import argparse
 import os
-from typing import Dict, List, Tuple
 
 import pandas as pd
 
@@ -36,7 +33,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def _resolve_test_path(data_dir: str) -> str:
+def _resolve_test_path(data_dir):
     candidates = [
         "testA_click_log.csv",
         "testB_click_log_Test_B.csv",
@@ -47,12 +44,14 @@ def _resolve_test_path(data_dir: str) -> str:
         path = os.path.join(data_dir, name)
         if os.path.exists(path):
             return path
-    raise FileNotFoundError(
-        f"No test click log found under {data_dir}. Tried: {', '.join(candidates)}"
+    raise IOError(
+        "No test click log found under {}. Tried: {}".format(
+            data_dir, ", ".join(candidates)
+        )
     )
 
 
-def _build_history(click_df: pd.DataFrame) -> Dict[int, List[int]]:
+def _build_history(click_df):
     return (
         click_df.sort_values(["user_id", "click_timestamp"])
         .groupby("user_id")["click_article_id"]
@@ -61,17 +60,17 @@ def _build_history(click_df: pd.DataFrame) -> Dict[int, List[int]]:
     )
 
 
-def _popular_items(click_df: pd.DataFrame, k: int) -> List[int]:
+def _popular_items(click_df, k):
     return click_df["click_article_id"].value_counts().head(k).index.tolist()
 
 
 def _recall_for_user(
-    user_id: int,
-    itemcf: ItemCF,
-    history: Dict[int, List[int]],
-    topk_recall: int,
-    popular_items: List[int],
-) -> List[Tuple[int, float]]:
+    user_id,
+    itemcf,
+    history,
+    topk_recall,
+    popular_items,
+):
     recalled = itemcf.recall(user_id, topk=topk_recall)
     if len(recalled) >= topk_recall:
         return recalled
@@ -93,14 +92,15 @@ def _recall_for_user(
 
 
 def build_baseline_submission(
-    data_dir: str,
-    output_dir: str,
-    topk_recall: int,
-    topk_submit: int,
-    topk_sim: int,
-    popular_fill_k: int,
-) -> str:
-    os.makedirs(output_dir, exist_ok=True)
+    data_dir,
+    output_dir,
+    topk_recall,
+    topk_submit,
+    topk_sim,
+    popular_fill_k,
+):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     train_path = os.path.join(data_dir, "train_click_log.csv")
     test_path = _resolve_test_path(data_dir)

@@ -8,10 +8,6 @@ The official competition metric is **MRR@5** (Mean Reciprocal Rank at 5):
 Additional metrics provided: Hit Rate@k and NDCG@k.
 """
 
-from __future__ import annotations
-
-from typing import Dict, List
-
 import numpy as np
 import pandas as pd
 
@@ -20,7 +16,7 @@ from .utils import get_logger
 logger = get_logger(__name__)
 
 
-def reciprocal_rank(predictions: List[int], true_item: int, k: int = 5) -> float:
+def reciprocal_rank(predictions, true_item, k=5):
     """Compute the reciprocal rank of *true_item* in *predictions[:k]*."""
     for rank, item in enumerate(predictions[:k], start=1):
         if item == true_item:
@@ -28,12 +24,12 @@ def reciprocal_rank(predictions: List[int], true_item: int, k: int = 5) -> float
     return 0.0
 
 
-def hit_at_k(predictions: List[int], true_item: int, k: int = 5) -> int:
+def hit_at_k(predictions, true_item, k=5):
     """Return 1 if *true_item* is in the top-*k* predictions, else 0."""
     return int(true_item in predictions[:k])
 
 
-def ndcg_at_k(predictions: List[int], true_item: int, k: int = 5) -> float:
+def ndcg_at_k(predictions, true_item, k=5):
     """Compute NDCG@k for a single-relevant-item scenario."""
     for rank, item in enumerate(predictions[:k], start=1):
         if item == true_item:
@@ -42,10 +38,10 @@ def ndcg_at_k(predictions: List[int], true_item: int, k: int = 5) -> float:
 
 
 def evaluate(
-    ranked_df: pd.DataFrame,
-    label_df: pd.DataFrame,
-    k: int = 5,
-) -> Dict[str, float]:
+    ranked_df,
+    label_df,
+    k=5,
+):
     """Compute MRR@k, Hit@k and NDCG@k across all users.
 
     Parameters
@@ -79,15 +75,15 @@ def evaluate(
         ndcg_scores.append(ndcg_at_k(preds, true_item, k))
 
     results = {
-        f"mrr@{k}": float(np.mean(mrr_scores)),
-        f"hit_rate@{k}": float(np.mean(hit_scores)),
-        f"ndcg@{k}": float(np.mean(ndcg_scores)),
+        "mrr@{}".format(k): float(np.mean(mrr_scores)),
+        "hit_rate@{}".format(k): float(np.mean(hit_scores)),
+        "ndcg@{}".format(k): float(np.mean(ndcg_scores)),
     }
     logger.info("Evaluation results: %s", results)
     return results
 
 
-def make_submission(ranked_df: pd.DataFrame, topk: int = 5) -> pd.DataFrame:
+def make_submission(ranked_df, topk=5):
     """Format predictions as the competition submission file.
 
     Parameters
@@ -108,6 +104,6 @@ def make_submission(ranked_df: pd.DataFrame, topk: int = 5) -> pd.DataFrame:
     )
     top["rank"] = top.groupby("user_id").cumcount() + 1
     wide = top.pivot(index="user_id", columns="rank", values="article_id")
-    wide.columns = [f"article_{i}" for i in wide.columns]
+    wide.columns = ["article_{}".format(i) for i in wide.columns]
     wide.reset_index(inplace=True)
     return wide
