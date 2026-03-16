@@ -23,6 +23,10 @@ def parse_args():
         default="0.4,0.2,0.2,0.2",
         help="Weights for itemcf,youtube_dnn,content,hot_fresh recalls",
     )
+    parser.add_argument("--youtube_dnn_use_deepmatch", action="store_true", help="Use DeepMatch/DeepCTR/TensorFlow for YouTubeDNN recall when available")
+    parser.add_argument("--youtube_dnn_embedding_dim", type=int, default=16, help="Embedding dim for DeepMatch YouTubeDNN")
+    parser.add_argument("--youtube_dnn_epochs", type=int, default=1, help="Training epochs for DeepMatch YouTubeDNN")
+    parser.add_argument("--youtube_dnn_batch_size", type=int, default=256, help="Batch size for DeepMatch YouTubeDNN")
     return parser.parse_args()
 
 
@@ -36,6 +40,10 @@ def main():
         topk_sim=args.topk_sim,
         popular_fill_k=args.popular_fill_k,
         recall_weights=args.recall_weights,
+        youtube_dnn_use_deepmatch=args.youtube_dnn_use_deepmatch,
+        youtube_dnn_embedding_dim=args.youtube_dnn_embedding_dim,
+        youtube_dnn_epochs=args.youtube_dnn_epochs,
+        youtube_dnn_batch_size=args.youtube_dnn_batch_size,
     )
 
 

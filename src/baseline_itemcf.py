@@ -51,6 +51,10 @@ def parse_args():
         default="0.4,0.2,0.2,0.2",
         help="Weights for itemcf,youtube_dnn,content,hot_fresh recalls",
     )
+    parser.add_argument("--youtube_dnn_use_deepmatch", action="store_true", help="Use DeepMatch/DeepCTR/TensorFlow for YouTubeDNN recall when available")
+    parser.add_argument("--youtube_dnn_embedding_dim", type=int, default=16, help="Embedding dim for DeepMatch YouTubeDNN")
+    parser.add_argument("--youtube_dnn_epochs", type=int, default=1, help="Training epochs for DeepMatch YouTubeDNN")
+    parser.add_argument("--youtube_dnn_batch_size", type=int, default=256, help="Batch size for DeepMatch YouTubeDNN")
     return parser.parse_args()
 
 
@@ -147,9 +151,18 @@ def _fit_recall_models(
     item_category,
     item_popularity,
     item_created_at,
+    youtube_dnn_use_deepmatch=False,
+    youtube_dnn_embedding_dim=16,
+    youtube_dnn_epochs=1,
+    youtube_dnn_batch_size=256,
 ):
     itemcf = ItemCF(topk_sim=topk_sim).fit(history)
-    youtube_dnn = YouTubeDNNRecall().fit(history, item_embeddings=item_embeddings)
+    youtube_dnn = YouTubeDNNRecall(
+        use_deepmatch=youtube_dnn_use_deepmatch,
+        embedding_dim=youtube_dnn_embedding_dim,
+        epochs=youtube_dnn_epochs,
+        batch_size=youtube_dnn_batch_size,
+    ).fit(history, item_embeddings=item_embeddings)
     content = ContentSimilarityRecall().fit(
         history, item_embeddings=item_embeddings, item_category=item_category
     )
@@ -198,6 +211,10 @@ def build_baseline_submission(
     topk_sim,
     popular_fill_k,
     recall_weights="0.4,0.2,0.2,0.2",
+    youtube_dnn_use_deepmatch=False,
+    youtube_dnn_embedding_dim=16,
+    youtube_dnn_epochs=1,
+    youtube_dnn_batch_size=256,
 ):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -231,6 +248,10 @@ def build_baseline_submission(
         item_category=item_category,
         item_popularity=item_popularity,
         item_created_at=item_created_at,
+        youtube_dnn_use_deepmatch=youtube_dnn_use_deepmatch,
+        youtube_dnn_embedding_dim=youtube_dnn_embedding_dim,
+        youtube_dnn_epochs=youtube_dnn_epochs,
+        youtube_dnn_batch_size=youtube_dnn_batch_size,
     )
     train_candidates = _multi_recall(
         users=train_users,
@@ -270,6 +291,10 @@ def build_baseline_submission(
         item_category=item_category,
         item_popularity=item_popularity,
         item_created_at=item_created_at,
+        youtube_dnn_use_deepmatch=youtube_dnn_use_deepmatch,
+        youtube_dnn_embedding_dim=youtube_dnn_embedding_dim,
+        youtube_dnn_epochs=youtube_dnn_epochs,
+        youtube_dnn_batch_size=youtube_dnn_batch_size,
     )
     test_candidates = _multi_recall(
         users=test_users,
@@ -316,6 +341,10 @@ def main():
         topk_sim=args.topk_sim,
         popular_fill_k=args.popular_fill_k,
         recall_weights=args.recall_weights,
+        youtube_dnn_use_deepmatch=args.youtube_dnn_use_deepmatch,
+        youtube_dnn_embedding_dim=args.youtube_dnn_embedding_dim,
+        youtube_dnn_epochs=args.youtube_dnn_epochs,
+        youtube_dnn_batch_size=args.youtube_dnn_batch_size,
     )
 
 

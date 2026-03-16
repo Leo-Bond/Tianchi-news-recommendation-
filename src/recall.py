@@ -297,9 +297,9 @@ class BPR:
 
 
 class YouTubeDNNRecall:
-    """Embedding-based user-item recall (YouTubeDNN-style two-tower proxy)."""
+    """YouTubeDNN recall with DeepMatch/DeepCTR/TensorFlow backend and safe fallback."""
 
-    def __init__(self, recency_decay=0.8):
+    def __init__(self, recency_decay=0.8, use_deepmatch=True, embedding_dim=16, epochs=1, batch_size=256):
         """Initialize the recall model.
 
         Parameters
@@ -307,19 +307,129 @@ class YouTubeDNNRecall:
         recency_decay : float
             Exponential decay factor (0~1] for user-history weighting.
             Higher values decay more slowly, keeping older clicks more influential.
+        use_deepmatch : bool
+            Whether to try DeepMatch + DeepCTR + TensorFlow backend first.
+        embedding_dim : int
+            Embedding size for the DeepMatch YouTubeDNN backend.
+        epochs : int
+            Training epochs for the DeepMatch YouTubeDNN backend.
+        batch_size : int
+            Batch size for the DeepMatch YouTubeDNN backend.
         """
         if recency_decay <= 0 or recency_decay > 1:
             raise ValueError("recency_decay must be in (0, 1].")
         self.recency_decay = recency_decay
+        self.use_deepmatch = use_deepmatch
+        self.embedding_dim = embedding_dim
+        self.epochs = epochs
+        self.batch_size = batch_size
         self.user_history = {}
         self.item_embeddings = {}
         self._all_items = []
+        self._backend = "proxy"
+
+        # deepmatch backend artifacts
+        self._user2idx = {}
+        self._item2idx = {}
+        self._idx2item = {}
+        self._seq_max_len = 1
+        self._dm_user_model = None
+        self._dm_item_matrix = None
 
     def fit(self, click_history, item_embeddings):
         self.user_history = click_history
         self.item_embeddings = item_embeddings or {}
         self._all_items = list(self.item_embeddings.keys())
+        self._backend = "proxy"
+        if self.use_deepmatch:
+            ok = self._fit_deepmatch(click_history)
+            if ok:
+                self._backend = "deepmatch"
         return self
+
+    def _fit_deepmatch(self, click_history):
+        try:
+            from deepctr.feature_column import SparseFeat, VarLenSparseFeat
+            from deepmatch.models import YoutubeDNN
+            from deepmatch.utils import sampledsoftmaxloss
+            from tensorflow.keras.models import Model
+            from tensorflow.keras.preprocessing.sequence import pad_sequences
+        except Exception as exc:
+            logger.warning("YouTubeDNN deepmatch backend unavailable, fallback to proxy: %s", exc)
+            return False
+
+        users = [u for u, items in click_history.items() if len(items) >= 2]
+        if not users:
+            return False
+
+        all_items = sorted({it for items in click_history.values() for it in items})
+        if not all_items:
+            return False
+
+        self._user2idx = {u: idx + 1 for idx, u in enumerate(users)}
+        self._item2idx = {it: idx + 1 for idx, it in enumerate(all_items)}
+        self._idx2item = {idx: item for item, idx in self._item2idx.items()}
+
+        seqs, lens, user_ids, targets = [], [], [], []
+        for user_id in users:
+            mapped = [self._item2idx[it] for it in click_history.get(user_id, []) if it in self._item2idx]
+            for pos in range(1, len(mapped)):
+                hist = mapped[:pos]
+                seqs.append(hist)
+                lens.append(len(hist))
+                user_ids.append(self._user2idx[user_id])
+                targets.append(mapped[pos])
+
+        if not targets:
+            return False
+
+        self._seq_max_len = max(lens) if lens else 1
+        hist_padded = pad_sequences(
+            seqs, maxlen=self._seq_max_len, padding="post", truncating="post", value=0
+        )
+
+        user_feature_columns = [
+            SparseFeat("user_id", vocabulary_size=len(self._user2idx) + 1, embedding_dim=self.embedding_dim),
+            VarLenSparseFeat(
+                SparseFeat(
+                    "hist_article_id",
+                    vocabulary_size=len(self._item2idx) + 1,
+                    embedding_dim=self.embedding_dim,
+                    embedding_name="article_id",
+                ),
+                maxlen=self._seq_max_len,
+                combiner="mean",
+                length_name="hist_len",
+            ),
+        ]
+        item_feature_columns = [
+            SparseFeat("article_id", vocabulary_size=len(self._item2idx) + 1, embedding_dim=self.embedding_dim)
+        ]
+        model = YoutubeDNN(
+            user_feature_columns,
+            item_feature_columns,
+            num_sampled=min(5, len(self._item2idx)),
+            user_dnn_hidden_units=(64, self.embedding_dim),
+        )
+        model.compile("adam", sampledsoftmaxloss)
+
+        train_input = {
+            "user_id": np.array(user_ids, dtype="int32"),
+            "hist_article_id": np.array(hist_padded, dtype="int32"),
+            "hist_len": np.array(lens, dtype="int32"),
+            "article_id": np.array(targets, dtype="int32"),
+        }
+        y = np.array(targets, dtype="int32")
+        model.fit(train_input, y, batch_size=self.batch_size, epochs=self.epochs, verbose=0)
+
+        self._dm_user_model = Model(inputs=model.user_input, outputs=model.user_embedding)
+        dm_item_model = Model(inputs=model.item_input, outputs=model.item_embedding)
+        item_idx = np.array(list(self._idx2item.keys()), dtype="int32")
+        item_vec = dm_item_model.predict({"article_id": item_idx}, verbose=0)
+        norms = np.linalg.norm(item_vec, axis=1, keepdims=True)
+        norms[norms < 1e-12] = 1.0
+        self._dm_item_matrix = item_vec / norms
+        return True
 
     def _user_embedding(self, user_id):
         history = self.user_history.get(user_id, [])
@@ -337,6 +447,9 @@ class YouTubeDNNRecall:
         return safe_normalize(np.mean(vectors, axis=0))
 
     def recall(self, user_id, topk=50):
+        if self._backend == "deepmatch":
+            return self._recall_deepmatch(user_id, topk=topk)
+
         user_vec = self._user_embedding(user_id)
         if user_vec is None:
             return []
@@ -350,6 +463,42 @@ class YouTubeDNNRecall:
             scores.append((item, score))
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:topk]
+
+    def _recall_deepmatch(self, user_id, topk=50):
+        if user_id not in self._user2idx or self._dm_user_model is None or self._dm_item_matrix is None:
+            return []
+        try:
+            from tensorflow.keras.preprocessing.sequence import pad_sequences
+        except Exception:
+            return []
+
+        history = self.user_history.get(user_id, [])
+        mapped = [self._item2idx[it] for it in history if it in self._item2idx]
+        if not mapped:
+            return []
+        hist_padded = pad_sequences(
+            [mapped], maxlen=self._seq_max_len, padding="post", truncating="post", value=0
+        )
+        user_vec = self._dm_user_model.predict(
+            {
+                "user_id": np.array([self._user2idx[user_id]], dtype="int32"),
+                "hist_article_id": np.array(hist_padded, dtype="int32"),
+                "hist_len": np.array([len(mapped)], dtype="int32"),
+            },
+            verbose=0,
+        )[0]
+        user_vec = safe_normalize(user_vec)
+        sim = self._dm_item_matrix.dot(user_vec)
+        seen = set(history)
+        candidates = []
+        for idx, score in enumerate(sim):
+            item_idx = idx + 1
+            item_id = self._idx2item.get(item_idx)
+            if item_id is None or item_id in seen:
+                continue
+            candidates.append((item_id, float(score)))
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        return candidates[:topk]
 
 
 class ContentSimilarityRecall:
