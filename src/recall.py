@@ -18,18 +18,11 @@ from collections import defaultdict
 
 import numpy as np
 
-from .utils import get_logger, timer
+from .utils import get_logger, safe_normalize, timer
 
 logger = get_logger(__name__)
 
 RecallResult = list
-
-
-def _safe_norm(vec):
-    norm = np.linalg.norm(vec)
-    if norm == 0:
-        return vec
-    return vec / norm
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +299,18 @@ class BPR:
 class YouTubeDNNRecall:
     """Embedding-based user-item recall (YouTubeDNN-style two-tower proxy)."""
 
-    def __init__(self):
+    def __init__(self, recency_decay=0.8):
+        """Initialize the recall model.
+
+        Parameters
+        ----------
+        recency_decay : float
+            Exponential decay factor (0~1] for user-history weighting.
+            Higher values decay more slowly, keeping older clicks more influential.
+        """
+        if recency_decay <= 0 or recency_decay > 1:
+            raise ValueError("recency_decay must be in (0, 1].")
+        self.recency_decay = recency_decay
         self.user_history = {}
         self.item_embeddings = {}
         self._all_items = []
@@ -326,11 +330,11 @@ class YouTubeDNNRecall:
             vec = self.item_embeddings.get(item)
             if vec is None:
                 continue
-            recency_weight = 0.8 ** (len(history) - 1 - idx)
+            recency_weight = self.recency_decay ** (len(history) - 1 - idx)
             vectors.append(recency_weight * vec)
         if not vectors:
             return None
-        return _safe_norm(np.mean(vectors, axis=0))
+        return safe_normalize(np.mean(vectors, axis=0))
 
     def recall(self, user_id, topk=50):
         user_vec = self._user_embedding(user_id)
@@ -342,7 +346,7 @@ class YouTubeDNNRecall:
             if item in seen:
                 continue
             item_vec = self.item_embeddings[item]
-            score = float(np.dot(user_vec, _safe_norm(item_vec)))
+            score = float(np.dot(user_vec, safe_normalize(item_vec)))
             scores.append((item, score))
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:topk]
@@ -351,7 +355,16 @@ class YouTubeDNNRecall:
 class ContentSimilarityRecall:
     """Content-similarity recall based on item embeddings and category match."""
 
-    def __init__(self):
+    def __init__(self, category_bonus=0.1):
+        """Initialize the recall model.
+
+        Parameters
+        ----------
+        category_bonus : float
+            Additive bonus for same-category candidates.
+            Typical values are in [0, 1].
+        """
+        self.category_bonus = category_bonus
         self.user_history = {}
         self.item_embeddings = {}
         self.item_category = {}
@@ -370,15 +383,16 @@ class ContentSimilarityRecall:
         anchor_vec = self.item_embeddings.get(anchor)
         if anchor_vec is None:
             return []
-        anchor_vec = _safe_norm(anchor_vec)
+        anchor_vec = safe_normalize(anchor_vec)
         anchor_cat = self.item_category.get(anchor)
         seen = set(history)
         scores = []
         for item, emb in self.item_embeddings.items():
             if item in seen:
                 continue
-            cos = float(np.dot(anchor_vec, _safe_norm(emb)))
-            cat_bonus = 0.1 if anchor_cat is not None and self.item_category.get(item) == anchor_cat else 0.0
+            cos = float(np.dot(anchor_vec, safe_normalize(emb)))
+            same_category = anchor_cat is not None and self.item_category.get(item) == anchor_cat
+            cat_bonus = self.category_bonus if same_category else 0.0
             scores.append((item, cos + cat_bonus))
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:topk]
@@ -388,6 +402,16 @@ class HotFreshRecall:
     """Popularity + freshness recall."""
 
     def __init__(self, fresh_weight=0.3):
+        """Initialize the recall model.
+
+        Parameters
+        ----------
+        fresh_weight : float
+            Weight assigned to freshness score in [0, 1].
+            Popularity weight becomes (1 - fresh_weight).
+        """
+        if fresh_weight < 0 or fresh_weight > 1:
+            raise ValueError("fresh_weight must be in [0, 1].")
         self.fresh_weight = fresh_weight
         self.user_history = {}
         self.item_pop = {}

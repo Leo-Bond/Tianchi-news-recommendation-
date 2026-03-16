@@ -83,9 +83,11 @@ def _popular_items(click_df, k):
 def _parse_weights(weight_text):
     weights = [float(x) for x in weight_text.split(",") if x.strip()]
     if len(weights) != 4:
+        logger.warning("Invalid --recall_weights '%s', fallback to default 0.4,0.2,0.2,0.2", weight_text)
         return [0.4, 0.2, 0.2, 0.2]
     total = sum(weights)
     if total <= 0:
+        logger.warning("Non-positive --recall_weights sum for '%s', fallback to default", weight_text)
         return [0.4, 0.2, 0.2, 0.2]
     return [w / total for w in weights]
 

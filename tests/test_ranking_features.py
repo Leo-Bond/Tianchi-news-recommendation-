@@ -40,8 +40,13 @@ class RankingFeatureTest(unittest.TestCase):
             "user_interest_dist",
         })
         self.assertEqual(len(df), 2)
+        row_101 = df[df["article_id"] == 101].iloc[0]
+        self.assertEqual(row_101["category_match"], 1.0)
+        self.assertAlmostEqual(row_101["publish_time_gap"], 5.0)
+        self.assertAlmostEqual(row_101["article_popularity"], 1.0)
+        self.assertGreater(row_101["embedding_sim"], 0.99)
 
-    def test_ranker_predict_returns_rank_score(self):
+    def test_ranker_predict_returns_rank_score_with_fallback(self):
         feature_df = pd.DataFrame(
             [
                 {
@@ -68,10 +73,39 @@ class RankingFeatureTest(unittest.TestCase):
         )
         labels = pd.DataFrame([{"user_id": 1, "article_id": 101, "label": 1}])
 
-        ranker = GBDTLRRanker().fit(feature_df, labels)
+        ranker = GBDTLRRanker()
+        ranker._available = False
+        ranker.fit(feature_df, labels)
         out = ranker.predict(feature_df)
         self.assertIn("rank_score", out.columns)
         self.assertEqual(len(out), 2)
+        score_101 = out[out["article_id"] == 101]["rank_score"].iloc[0]
+        score_102 = out[out["article_id"] == 102]["rank_score"].iloc[0]
+        self.assertGreater(score_101, score_102)
+
+    def test_ranker_trains_sklearn_path_when_available(self):
+        ranker = GBDTLRRanker()
+        if not ranker._available:
+            self.skipTest("sklearn not available in environment")
+
+        feature_df = pd.DataFrame(
+            [
+                {"user_id": 1, "article_id": 101, "recall_score": 0.9, "embedding_sim": 0.9, "category_match": 1.0, "publish_time_gap": 5.0, "article_popularity": 1.0, "user_interest_dist": 0.8},
+                {"user_id": 1, "article_id": 102, "recall_score": 0.2, "embedding_sim": 0.1, "category_match": 0.0, "publish_time_gap": 200.0, "article_popularity": 0.2, "user_interest_dist": 0.1},
+                {"user_id": 2, "article_id": 103, "recall_score": 0.8, "embedding_sim": 0.8, "category_match": 1.0, "publish_time_gap": 8.0, "article_popularity": 0.9, "user_interest_dist": 0.7},
+                {"user_id": 2, "article_id": 104, "recall_score": 0.1, "embedding_sim": 0.2, "category_match": 0.0, "publish_time_gap": 150.0, "article_popularity": 0.1, "user_interest_dist": 0.1},
+            ]
+        )
+        labels = pd.DataFrame(
+            [
+                {"user_id": 1, "article_id": 101, "label": 1},
+                {"user_id": 2, "article_id": 103, "label": 1},
+            ]
+        )
+        ranker.fit(feature_df, labels)
+        self.assertIsNotNone(ranker._lr)
+        out = ranker.predict(feature_df)
+        self.assertEqual(len(out), 4)
 
 
 if __name__ == "__main__":

@@ -1,16 +1,10 @@
 """Feature engineering and GBDT+LR ranking for candidate articles."""
 
-from collections import Counter, defaultdict
+from collections import Counter
 
 import numpy as np
 import pandas as pd
-
-
-def _safe_norm(vec):
-    norm = np.linalg.norm(vec)
-    if norm == 0:
-        return vec
-    return vec / norm
+from .utils import safe_normalize
 
 
 def build_user_interest_distribution(user_history, item_category, recent_n=20):
@@ -33,7 +27,7 @@ def build_user_embeddings(user_history, item_embeddings):
         vectors = [item_embeddings[item] for item in items if item in item_embeddings]
         if not vectors:
             continue
-        user_emb[user_id] = _safe_norm(np.mean(vectors, axis=0))
+        user_emb[user_id] = safe_normalize(np.mean(vectors, axis=0))
     return user_emb
 
 
@@ -59,7 +53,7 @@ def build_feature_dataframe(
         interest_dist = user_interest.get(user_id, {})
         for article_id, recall_score in candidates:
             i_vec = item_embeddings.get(article_id)
-            emb_sim = float(np.dot(u_vec, _safe_norm(i_vec))) if (u_vec is not None and i_vec is not None) else 0.0
+            emb_sim = float(np.dot(u_vec, safe_normalize(i_vec))) if (u_vec is not None and i_vec is not None) else 0.0
             cat = item_category.get(article_id)
             cat_match = 1.0 if (last_cat is not None and cat == last_cat) else 0.0
             publish_gap = abs(float(last_ts) - float(item_created_at.get(article_id, last_ts)))
