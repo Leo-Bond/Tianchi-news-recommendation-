@@ -160,7 +160,7 @@ def _fit_recall_models(
     youtube_dnn = YouTubeDNNRecall(
         use_deepmatch=youtube_dnn_use_deepmatch,
         embedding_dim=youtube_dnn_embedding_dim,
-        epochs=youtube_dnn_epochs,
+        training_epochs=youtube_dnn_epochs,
         batch_size=youtube_dnn_batch_size,
     ).fit(history, item_embeddings=item_embeddings)
     content = ContentSimilarityRecall().fit(

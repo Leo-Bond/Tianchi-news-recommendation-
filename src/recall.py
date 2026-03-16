@@ -299,7 +299,14 @@ class BPR:
 class YouTubeDNNRecall:
     """YouTubeDNN recall with DeepMatch/DeepCTR/TensorFlow backend and safe fallback."""
 
-    def __init__(self, recency_decay=0.8, use_deepmatch=True, embedding_dim=16, epochs=1, batch_size=256):
+    def __init__(
+        self,
+        recency_decay=0.8,
+        use_deepmatch=True,
+        embedding_dim=16,
+        training_epochs=1,
+        batch_size=256,
+    ):
         """Initialize the recall model.
 
         Parameters
@@ -311,7 +318,7 @@ class YouTubeDNNRecall:
             Whether to try DeepMatch + DeepCTR + TensorFlow backend first.
         embedding_dim : int
             Embedding size for the DeepMatch YouTubeDNN backend.
-        epochs : int
+        training_epochs : int
             Training epochs for the DeepMatch YouTubeDNN backend.
         batch_size : int
             Batch size for the DeepMatch YouTubeDNN backend.
@@ -321,7 +328,7 @@ class YouTubeDNNRecall:
         self.recency_decay = recency_decay
         self.use_deepmatch = use_deepmatch
         self.embedding_dim = embedding_dim
-        self.epochs = epochs
+        self.training_epochs = training_epochs
         self.batch_size = batch_size
         self.user_history = {}
         self.item_embeddings = {}
@@ -420,7 +427,13 @@ class YouTubeDNNRecall:
             "article_id": np.array(targets, dtype="int32"),
         }
         y = np.array(targets, dtype="int32")
-        model.fit(train_input, y, batch_size=self.batch_size, epochs=self.epochs, verbose=0)
+        model.fit(
+            train_input,
+            y,
+            batch_size=self.batch_size,
+            epochs=self.training_epochs,
+            verbose=0,
+        )
 
         self._dm_user_model = Model(inputs=model.user_input, outputs=model.user_embedding)
         dm_item_model = Model(inputs=model.item_input, outputs=model.item_embedding)

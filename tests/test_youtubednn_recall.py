@@ -25,7 +25,9 @@ class YouTubeDNNRecallTest(unittest.TestCase):
         self.assertEqual(recalled[0][0], 104)
 
     def test_deepmatch_flag_fallback_is_safe(self):
-        model = YouTubeDNNRecall(use_deepmatch=True, epochs=1).fit(self.history, self.embeddings)
+        model = YouTubeDNNRecall(use_deepmatch=True, training_epochs=1).fit(
+            self.history, self.embeddings
+        )
         recalled = model.recall(1, topk=3)
         self.assertIsInstance(recalled, list)
         self.assertGreaterEqual(len(recalled), 1)
