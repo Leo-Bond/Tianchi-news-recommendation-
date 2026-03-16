@@ -1,0 +1,3 @@
+tensorflow==2.16.1
+deepctr==0.9.3
+deepmatch==0.3.1

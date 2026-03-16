@@ -5,6 +5,7 @@ import time
 import pickle
 import logging
 import inspect
+import numpy as np
 from functools import wraps
 
 
@@ -105,3 +106,11 @@ def load_pickle(path):
     """Load and return a pickled object from *path*."""
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+def safe_normalize(vec):
+    """Return l2-normalized vector while keeping zero vectors unchanged."""
+    norm = np.linalg.norm(vec)
+    if norm < 1e-12:
+        return vec
+    return vec / norm

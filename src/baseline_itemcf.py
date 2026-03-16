@@ -1,4 +1,4 @@
-"""Simple ItemCF baseline for Tianchi news recommendation.
+"""ItemCF-only baseline pipeline for Tianchi news recommendation.
 
 Usage
 -----
@@ -11,19 +11,21 @@ import os
 import pandas as pd
 
 try:
-    from .recall import ItemCF
+    from .data_processing import build_user_click_history
     from .evaluate import make_submission
+    from .recall import ItemCF
     from .utils import get_logger
 except ImportError:  # support direct script execution
-    from recall import ItemCF
+    from data_processing import build_user_click_history
     from evaluate import make_submission
+    from recall import ItemCF
     from utils import get_logger
 
 logger = get_logger(__name__, source_file=__file__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ItemCF baseline submission generator")
+    parser = argparse.ArgumentParser(description="ItemCF-only baseline submission generator")
     parser.add_argument("--data_dir", default="tcdata", help="Directory containing click logs")
     parser.add_argument("--output_dir", default="output", help="Directory to save submission")
     parser.add_argument("--topk_recall", type=int, default=50, help="Recall candidates per user")
@@ -45,50 +47,16 @@ def _resolve_test_path(data_dir):
         if os.path.exists(path):
             return path
     raise IOError(
-        "No test click log found under {}. Tried: {}".format(
-            data_dir, ", ".join(candidates)
-        )
+        "No test click log found under {}. Tried: {}".format(data_dir, ", ".join(candidates))
     )
 
 
 def _build_history(click_df):
-    return (
-        click_df.sort_values(["user_id", "click_timestamp"])
-        .groupby("user_id")["click_article_id"]
-        .apply(list)
-        .to_dict()
-    )
+    return build_user_click_history(click_df.sort_values(["user_id", "click_timestamp"]))
 
 
 def _popular_items(click_df, k):
     return click_df["click_article_id"].value_counts().head(k).index.tolist()
-
-
-def _recall_for_user(
-    user_id,
-    itemcf,
-    history,
-    topk_recall,
-    popular_items,
-):
-    recalled = itemcf.recall(user_id, topk=topk_recall)
-    if len(recalled) >= topk_recall:
-        return recalled
-
-    seen_items = set(history.get(user_id, []))
-    existing_items = {item for item, _ in recalled}
-    filled = list(recalled)
-
-    fill_score = -1.0
-    for item in popular_items:
-        if item in seen_items or item in existing_items:
-            continue
-        filled.append((item, fill_score))
-        fill_score -= 1.0
-        if len(filled) >= topk_recall:
-            break
-
-    return filled
 
 
 def build_baseline_submission(
@@ -121,14 +89,20 @@ def build_baseline_submission(
 
     rows = []
     for user_id in test_users:
-        candidates = _recall_for_user(
-            user_id=user_id,
-            itemcf=itemcf,
-            history=user_history,
-            topk_recall=topk_recall,
-            popular_items=hot_items,
-        )
-        for article_id, score in candidates:
+        recalled = itemcf.recall(user_id, topk=topk_recall)
+        if len(recalled) < topk_recall:
+            seen = set(user_history.get(user_id, []))
+            existing = {item for item, _ in recalled}
+            fill_score = -1.0
+            for item in hot_items:
+                if item in seen or item in existing:
+                    continue
+                recalled.append((item, fill_score))
+                fill_score -= 1.0
+                if len(recalled) >= topk_recall:
+                    break
+
+        for article_id, score in recalled[:topk_recall]:
             rows.append((user_id, article_id, score))
 
     ranked_df = pd.DataFrame(rows, columns=["user_id", "article_id", "rank_score"])
@@ -136,7 +110,7 @@ def build_baseline_submission(
 
     submit_path = os.path.join(output_dir, "submission_itemcf_baseline.csv")
     submission.to_csv(submit_path, index=False)
-    logger.info("Saved baseline submission to %s shape=%s", submit_path, submission.shape)
+    logger.info("Saved itemcf baseline submission to %s shape=%s", submit_path, submission.shape)
     return submit_path
 
 
