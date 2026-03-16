@@ -21,8 +21,9 @@ Raw data  ──►  Multi-route recall merge  ──►  Feature engineering  �
 .
 ├── src/
 │   ├── __init__.py
-│   ├── main.py                # Unified baseline entrypoint
-│   ├── baseline_itemcf.py     # ItemCF baseline pipeline
+│   ├── main.py                # Multi-route recall + ranking entrypoint
+│   ├── multi_recall_ranking.py # Multi-route recall + GBDT+LR pipeline
+│   ├── baseline_itemcf.py     # ItemCF-only baseline pipeline
 │   ├── utils.py               # Logging, timing, pickle helpers
 │   ├── data_processing.py     # Load CSVs, split history / label
 │   ├── recall.py              # ItemCF implementation (+ optional UserCF/BPR)
@@ -62,6 +63,12 @@ python -m src.main --data_dir tcdata --output_dir output
 ```
 
 Saves `output/submission_itemcf_baseline.csv`.
+
+Run ItemCF-only baseline:
+
+```bash
+python -m src.baseline_itemcf --data_dir tcdata --output_dir output
+```
 
 ### 4. Offline test on train (leave-one-out)
 

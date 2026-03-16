@@ -7,7 +7,7 @@ python -m src.main --data_dir tcdata --output_dir output
 
 import argparse
 
-from src.baseline_itemcf import build_baseline_submission
+from src.multi_recall_ranking import build_baseline_submission
 
 
 def parse_args():
