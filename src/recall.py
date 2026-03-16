@@ -5,6 +5,9 @@ Available strategies
 ItemCF  – item-based collaborative filtering using co-click similarity.
 UserCF  – user-based collaborative filtering.
 BPR     – Bayesian Personalised Ranking (matrix factorisation variant).
+YouTubeDNNRecall       – embedding two-tower proxy recall.
+ContentSimilarityRecall – article-content similarity recall.
+HotFreshRecall         – popularity + freshness recall.
 
 Each strategy exposes a ``recall(user_id, topk)`` method and returns a list of
 ``(article_id, score)`` pairs sorted by score (descending).
@@ -20,6 +23,13 @@ from .utils import get_logger, timer
 logger = get_logger(__name__)
 
 RecallResult = list
+
+
+def _safe_norm(vec):
+    norm = np.linalg.norm(vec)
+    if norm == 0:
+        return vec
+    return vec / norm
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +301,127 @@ class BPR:
             for i in top_indices
             if i in index_to_item and scores[i] != -np.inf
         ]
+
+
+class YouTubeDNNRecall:
+    """Embedding-based user-item recall (YouTubeDNN-style two-tower proxy)."""
+
+    def __init__(self):
+        self.user_history = {}
+        self.item_embeddings = {}
+        self._all_items = []
+
+    def fit(self, click_history, item_embeddings):
+        self.user_history = click_history
+        self.item_embeddings = item_embeddings or {}
+        self._all_items = list(self.item_embeddings.keys())
+        return self
+
+    def _user_embedding(self, user_id):
+        history = self.user_history.get(user_id, [])
+        if not history:
+            return None
+        vectors = []
+        for idx, item in enumerate(history):
+            vec = self.item_embeddings.get(item)
+            if vec is None:
+                continue
+            recency_weight = 0.8 ** (len(history) - 1 - idx)
+            vectors.append(recency_weight * vec)
+        if not vectors:
+            return None
+        return _safe_norm(np.mean(vectors, axis=0))
+
+    def recall(self, user_id, topk=50):
+        user_vec = self._user_embedding(user_id)
+        if user_vec is None:
+            return []
+        seen = set(self.user_history.get(user_id, []))
+        scores = []
+        for item in self._all_items:
+            if item in seen:
+                continue
+            item_vec = self.item_embeddings[item]
+            score = float(np.dot(user_vec, _safe_norm(item_vec)))
+            scores.append((item, score))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:topk]
+
+
+class ContentSimilarityRecall:
+    """Content-similarity recall based on item embeddings and category match."""
+
+    def __init__(self):
+        self.user_history = {}
+        self.item_embeddings = {}
+        self.item_category = {}
+
+    def fit(self, click_history, item_embeddings, item_category):
+        self.user_history = click_history
+        self.item_embeddings = item_embeddings or {}
+        self.item_category = item_category or {}
+        return self
+
+    def recall(self, user_id, topk=50):
+        history = self.user_history.get(user_id, [])
+        if not history:
+            return []
+        anchor = history[-1]
+        anchor_vec = self.item_embeddings.get(anchor)
+        if anchor_vec is None:
+            return []
+        anchor_vec = _safe_norm(anchor_vec)
+        anchor_cat = self.item_category.get(anchor)
+        seen = set(history)
+        scores = []
+        for item, emb in self.item_embeddings.items():
+            if item in seen:
+                continue
+            cos = float(np.dot(anchor_vec, _safe_norm(emb)))
+            cat_bonus = 0.1 if anchor_cat is not None and self.item_category.get(item) == anchor_cat else 0.0
+            scores.append((item, cos + cat_bonus))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:topk]
+
+
+class HotFreshRecall:
+    """Popularity + freshness recall."""
+
+    def __init__(self, fresh_weight=0.3):
+        self.fresh_weight = fresh_weight
+        self.user_history = {}
+        self.item_pop = {}
+        self.item_fresh = {}
+        self._all_items = []
+
+    def fit(self, click_history, item_popularity, item_created_at):
+        self.user_history = click_history
+        self.item_pop = item_popularity or {}
+        item_created_at = item_created_at or {}
+        created_values = list(item_created_at.values()) if item_created_at else []
+        self._all_items = sorted(set(self.item_pop.keys()) | set(item_created_at.keys()))
+        if created_values:
+            mn, mx = min(created_values), max(created_values)
+            denom = (mx - mn) if mx != mn else 1.0
+            self.item_fresh = {
+                item: (item_created_at.get(item, mn) - mn) / denom for item in self._all_items
+            }
+        else:
+            self.item_fresh = {item: 0.0 for item in self._all_items}
+        return self
+
+    def recall(self, user_id, topk=50):
+        seen = set(self.user_history.get(user_id, []))
+        scores = []
+        for item in self._all_items:
+            if item in seen:
+                continue
+            pop = self.item_pop.get(item, 0.0)
+            fresh = self.item_fresh.get(item, 0.0)
+            score = (1.0 - self.fresh_weight) * pop + self.fresh_weight * fresh
+            scores.append((item, score))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:topk]
 
 
 # ---------------------------------------------------------------------------

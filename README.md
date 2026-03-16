@@ -5,10 +5,14 @@ A clean, baseline-first framework for the [Tianchi News Recommendation competiti
 ## Overview
 
 The task is to predict the next article a user will click based on historical behaviour.
-This repo now focuses on a simple **ItemCF recall baseline** that directly produces a submission file.
+This repo now supports a **multi-route recall + GBDT+LR ranking** framework:
+
+- Recall routes: ItemCF, embedding two-tower proxy (YouTubeDNN-style), content similarity, hot/fresh
+- Ranking features: recall score, user-item embedding similarity, category match, publish time gap, article popularity, user recent interest distribution
+- Ranker: GBDT leaf features + LR final scoring (with deterministic fallback when sklearn is unavailable)
 
 ```
-Raw data  ──►  User history build  ──►  ItemCF recall  ──►  Hot-item fill  ──►  Submission
+Raw data  ──►  Multi-route recall merge  ──►  Feature engineering  ──►  GBDT+LR ranking  ──►  Submission
 ```
 
 ## Project Structure
@@ -97,6 +101,7 @@ python -m src.main [-h] [--data_dir DATA_DIR] [--output_dir OUTPUT_DIR]
 | `--topk_submit` | `5` | Articles per user in submission |
 | `--topk_sim` | `20` | Similar items kept per clicked item |
 | `--popular_fill_k` | `200` | Hot-item pool size for recall fallback |
+| `--recall_weights` | `0.4,0.2,0.2,0.2` | Weights for ItemCF/YouTubeDNN/content/hot-fresh recall merge |
 
 ## License
 

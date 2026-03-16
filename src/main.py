@@ -11,13 +11,18 @@ from src.baseline_itemcf import build_baseline_submission
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ItemCF baseline pipeline")
+    parser = argparse.ArgumentParser(description="Multi-route recall + GBDT+LR ranking pipeline")
     parser.add_argument("--data_dir", default="tcdata", help="Directory containing click logs")
     parser.add_argument("--output_dir", default="output", help="Directory to save submission")
     parser.add_argument("--topk_recall", type=int, default=50, help="Recall candidates per user")
     parser.add_argument("--topk_submit", type=int, default=5, help="Final submit items per user")
     parser.add_argument("--topk_sim", type=int, default=20, help="ItemCF top similar items kept per item")
     parser.add_argument("--popular_fill_k", type=int, default=200, help="Hot items pool size for fallback")
+    parser.add_argument(
+        "--recall_weights",
+        default="0.4,0.2,0.2,0.2",
+        help="Weights for itemcf,youtube_dnn,content,hot_fresh recalls",
+    )
     return parser.parse_args()
 
 
@@ -30,6 +35,7 @@ def main():
         topk_submit=args.topk_submit,
         topk_sim=args.topk_sim,
         popular_fill_k=args.popular_fill_k,
+        recall_weights=args.recall_weights,
     )
 
 
