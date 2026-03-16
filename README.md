@@ -62,13 +62,15 @@ Place the competition data under `tcdata/` (or your custom `--data_dir`):
 python -m src.main --data_dir tcdata --output_dir output
 ```
 
-Saves `output/submission_itemcf_baseline.csv`.
+Saves `output/submission_multi_recall_ranking.csv`.
 
 Run ItemCF-only baseline:
 
 ```bash
 python -m src.baseline_itemcf --data_dir tcdata --output_dir output
 ```
+
+Saves `output/submission_itemcf_baseline.csv`.
 
 ### 4. Offline test on train (leave-one-out)
 

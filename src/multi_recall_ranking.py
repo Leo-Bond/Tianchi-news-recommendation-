@@ -325,7 +325,7 @@ def build_baseline_submission(
 
     submission = make_submission(ranked_df, topk=topk_submit)
 
-    submit_path = os.path.join(output_dir, "submission_itemcf_baseline.csv")
+    submit_path = os.path.join(output_dir, "submission_multi_recall_ranking.csv")
     submission.to_csv(submit_path, index=False)
     logger.info("Saved baseline submission to %s shape=%s", submit_path, submission.shape)
     return submit_path

@@ -324,7 +324,7 @@ class YouTubeDNNRecall:
             Batch size for the DeepMatch YouTubeDNN backend.
         """
         if recency_decay <= 0 or recency_decay > 1:
-            raise ValueError("recency_decay must be in (0, 1].")
+            raise ValueError("recency_decay must be greater than 0 and less than or equal to 1.")
         self.recency_decay = recency_decay
         self.use_deepmatch = use_deepmatch
         self.embedding_dim = embedding_dim
@@ -342,6 +342,7 @@ class YouTubeDNNRecall:
         self._seq_max_len = 1
         self._dm_user_model = None
         self._dm_item_matrix = None
+        self._dm_item_ids = []
 
     def fit(self, click_history, item_embeddings):
         self.user_history = click_history
@@ -437,7 +438,8 @@ class YouTubeDNNRecall:
 
         self._dm_user_model = Model(inputs=model.user_input, outputs=model.user_embedding)
         dm_item_model = Model(inputs=model.item_input, outputs=model.item_embedding)
-        item_idx = np.array(list(self._idx2item.keys()), dtype="int32")
+        item_idx = np.array(sorted(self._idx2item.keys()), dtype="int32")
+        self._dm_item_ids = item_idx.tolist()
         item_vec = dm_item_model.predict({"article_id": item_idx}, verbose=0)
         norms = np.linalg.norm(item_vec, axis=1, keepdims=True)
         norms[norms < 1e-12] = 1.0
@@ -504,8 +506,7 @@ class YouTubeDNNRecall:
         sim = self._dm_item_matrix.dot(user_vec)
         seen = set(history)
         candidates = []
-        for idx, score in enumerate(sim):
-            item_idx = idx + 1
+        for item_idx, score in zip(self._dm_item_ids, sim):
             item_id = self._idx2item.get(item_idx)
             if item_id is None or item_id in seen:
                 continue
@@ -573,7 +574,7 @@ class HotFreshRecall:
             Popularity weight becomes (1 - fresh_weight).
         """
         if fresh_weight < 0 or fresh_weight > 1:
-            raise ValueError("fresh_weight must be in [0, 1].")
+            raise ValueError("fresh_weight must be between 0 and 1 (inclusive).")
         self.fresh_weight = fresh_weight
         self.user_history = {}
         self.item_pop = {}
