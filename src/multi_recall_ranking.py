@@ -7,6 +7,7 @@ python -m src.multi_recall_ranking --data_dir tcdata --output_dir output
 
 import argparse
 import os
+import time
 
 import pandas as pd
 
@@ -38,23 +39,27 @@ except ImportError:  # support direct script execution
 logger = get_logger(__name__, source_file=__file__)
 
 
+def _log_stage(stage_name, start_time):
+    logger.info("%s finished in %.2fs", stage_name, time.time() - start_time)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Multi-route recall + ranking submission generator")
     parser.add_argument("--data_dir", default="tcdata", help="Directory containing click logs")
     parser.add_argument("--output_dir", default="output", help="Directory to save submission")
-    parser.add_argument("--topk_recall", type=int, default=50, help="Recall candidates per user")
+    parser.add_argument("--topk_recall", type=int, default=10, help="Recall candidates per user")
     parser.add_argument("--topk_submit", type=int, default=5, help="Final submit items per user")
-    parser.add_argument("--topk_sim", type=int, default=20, help="ItemCF top similar items kept per item")
-    parser.add_argument("--popular_fill_k", type=int, default=200, help="Hot items pool size for fallback")
+    parser.add_argument("--topk_sim", type=int, default=10, help="ItemCF top similar items kept per item")
+    parser.add_argument("--popular_fill_k", type=int, default=100, help="Hot items pool size for fallback")
     parser.add_argument(
         "--recall_weights",
-        default="0.4,0.2,0.2,0.2",
+        default="1,0,0,0",
         help="Weights for itemcf,youtube_dnn,content,hot_fresh recalls",
     )
-    parser.add_argument("--youtube_dnn_use_deepmatch", action="store_true", help="Use DeepMatch/DeepCTR/TensorFlow for YouTubeDNN recall when available")
-    parser.add_argument("--youtube_dnn_embedding_dim", type=int, default=16, help="Embedding dim for DeepMatch YouTubeDNN")
-    parser.add_argument("--youtube_dnn_epochs", type=int, default=1, help="Training epochs for DeepMatch YouTubeDNN")
-    parser.add_argument("--youtube_dnn_batch_size", type=int, default=256, help="Batch size for DeepMatch YouTubeDNN")
+    parser.add_argument("--max_train_users", type=int, default=20000, help="Maximum number of training users used to build ranker candidates")
+    parser.add_argument("--youtube_dnn_embedding_dim", type=int, default=128, help="Hidden size for the PyTorch YouTubeDNN user tower")
+    parser.add_argument("--youtube_dnn_epochs", type=int, default=1, help="Training epochs for the PyTorch YouTubeDNN")
+    parser.add_argument("--youtube_dnn_batch_size", type=int, default=256, help="Batch size for the PyTorch YouTubeDNN")
     return parser.parse_args()
 
 
@@ -94,6 +99,11 @@ def _parse_weights(weight_text):
         logger.warning("Non-positive --recall_weights sum for '%s', fallback to default", weight_text)
         return [0.4, 0.2, 0.2, 0.2]
     return [w / total for w in weights]
+
+
+def _active_routes(weights):
+    route_names = ["itemcf", "youtube_dnn", "content", "hot_fresh"]
+    return [(name, weight) for name, weight in zip(route_names, weights) if weight > 0]
 
 
 def _load_optional_frame(path):
@@ -151,27 +161,39 @@ def _fit_recall_models(
     item_category,
     item_popularity,
     item_created_at,
-    youtube_dnn_use_deepmatch=False,
-    youtube_dnn_embedding_dim=16,
+    youtube_dnn_embedding_dim=128,
     youtube_dnn_epochs=1,
     youtube_dnn_batch_size=256,
+    active_routes=None,
 ):
-    itemcf = ItemCF(topk_sim=topk_sim).fit(history)
-    youtube_dnn = YouTubeDNNRecall(
-        use_deepmatch=youtube_dnn_use_deepmatch,
-        embedding_dim=youtube_dnn_embedding_dim,
-        training_epochs=youtube_dnn_epochs,
-        batch_size=youtube_dnn_batch_size,
-    ).fit(history, item_embeddings=item_embeddings)
-    content = ContentSimilarityRecall().fit(
-        history, item_embeddings=item_embeddings, item_category=item_category
-    )
-    hot_fresh = HotFreshRecall().fit(
-        history,
-        item_popularity=item_popularity,
-        item_created_at=item_created_at,
-    )
-    return itemcf, youtube_dnn, content, hot_fresh
+    active_routes = active_routes or [("itemcf", 1.0)]
+    recallers = []
+    for route_name, _ in active_routes:
+        if route_name == "itemcf":
+            recallers.append(ItemCF(topk_sim=topk_sim).fit(history))
+        elif route_name == "youtube_dnn":
+            recallers.append(
+                YouTubeDNNRecall(
+                    embedding_dim=youtube_dnn_embedding_dim,
+                    training_epochs=youtube_dnn_epochs,
+                    batch_size=youtube_dnn_batch_size,
+                ).fit(history, item_embeddings=item_embeddings)
+            )
+        elif route_name == "content":
+            recallers.append(
+                ContentSimilarityRecall().fit(
+                    history, item_embeddings=item_embeddings, item_category=item_category
+                )
+            )
+        elif route_name == "hot_fresh":
+            recallers.append(
+                HotFreshRecall().fit(
+                    history,
+                    item_popularity=item_popularity,
+                    item_created_at=item_created_at,
+                )
+            )
+    return recallers
 
 
 def _multi_recall(
@@ -183,7 +205,8 @@ def _multi_recall(
     popular_items,
 ):
     results = {}
-    for user_id in users:
+    total_users = len(users)
+    for idx, user_id in enumerate(users, start=1):
         route_results = [{user_id: rec.recall(user_id, topk=topk_recall)} for rec in recallers]
         merged = merge_recall_results(route_results, weights=route_weights).get(user_id, [])
         merged = merged[:topk_recall]
@@ -200,6 +223,8 @@ def _multi_recall(
                 if len(merged) >= topk_recall:
                     break
         results[user_id] = merged
+        if idx % 5000 == 0 or idx == total_users:
+            logger.info("Multi recall progress: %d/%d users", idx, total_users)
     return results
 
 
@@ -211,14 +236,17 @@ def build_baseline_submission(
     topk_sim,
     popular_fill_k,
     recall_weights="0.4,0.2,0.2,0.2",
-    youtube_dnn_use_deepmatch=False,
-    youtube_dnn_embedding_dim=16,
+    max_train_users=20000,
+    youtube_dnn_embedding_dim=128,
     youtube_dnn_epochs=1,
     youtube_dnn_batch_size=256,
 ):
+    total_start = time.time()
+
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
+    stage_start = time.time()
     train_path = os.path.join(data_dir, "train_click_log.csv")
     test_path = _resolve_test_path(data_dir)
 
@@ -228,19 +256,35 @@ def build_baseline_submission(
     emb_df = _load_optional_frame(os.path.join(data_dir, "articles_emb.csv"))
     logger.info("Loaded train: %s shape=%s", train_path, train_df.shape)
     logger.info("Loaded test: %s shape=%s", test_path, test_df.shape)
+    _log_stage("Data loading", stage_start)
 
+    stage_start = time.time()
     all_click = pd.concat([train_df, test_df], ignore_index=True)
     all_click.sort_values(["user_id", "click_timestamp"], inplace=True)
     item_embeddings = _build_item_embeddings(emb_df)
     item_popularity, item_category, item_created_at = _build_item_meta(all_click, articles_df)
     weights = _parse_weights(recall_weights)
+    active_routes = _active_routes(weights)
+    active_weights = [weight for _, weight in active_routes]
     hot_items = _popular_items(all_click, popular_fill_k)
+    logger.info(
+        "Active recall routes: %s",
+        ", ".join("{}={:.3f}".format(name, weight) for name, weight in active_routes),
+    )
+    _log_stage("Global metadata build", stage_start)
 
     # ranker training data: leave-one-out on train clicks
+    stage_start = time.time()
     hist_df, label_df = split_last_click(train_df)
     train_history = _build_history(hist_df)
     train_users = label_df["user_id"].drop_duplicates().tolist()
+    if max_train_users and len(train_users) > max_train_users:
+        train_users = train_users[:max_train_users]
+        logger.info("Train users truncated to %d for lightweight ranking", len(train_users))
     train_last_ts = _build_user_last_timestamp(hist_df)
+    _log_stage("Train split and history build", stage_start)
+
+    stage_start = time.time()
     train_recallers = _fit_recall_models(
         history=train_history,
         topk_sim=topk_sim,
@@ -248,19 +292,25 @@ def build_baseline_submission(
         item_category=item_category,
         item_popularity=item_popularity,
         item_created_at=item_created_at,
-        youtube_dnn_use_deepmatch=youtube_dnn_use_deepmatch,
+        active_routes=active_routes,
         youtube_dnn_embedding_dim=youtube_dnn_embedding_dim,
         youtube_dnn_epochs=youtube_dnn_epochs,
         youtube_dnn_batch_size=youtube_dnn_batch_size,
     )
+    _log_stage("Train recall model fit", stage_start)
+
+    stage_start = time.time()
     train_candidates = _multi_recall(
         users=train_users,
         recallers=train_recallers,
         history=train_history,
         topk_recall=topk_recall,
-        route_weights=weights,
+        route_weights=active_weights,
         popular_items=hot_items,
     )
+    _log_stage("Train candidate recall", stage_start)
+
+    stage_start = time.time()
     train_feature_df = build_feature_dataframe(
         candidates_by_user=train_candidates,
         user_history=train_history,
@@ -270,6 +320,7 @@ def build_baseline_submission(
         item_popularity=item_popularity,
         user_last_ts=train_last_ts,
     )
+    _log_stage("Train feature build", stage_start)
     if train_feature_df.empty:
         logger.warning("No train features built; fallback to recall score ranking.")
 
@@ -278,12 +329,18 @@ def build_baseline_submission(
     ].copy()
     train_labels["label"] = 1
 
+    stage_start = time.time()
     ranker = GBDTLRRanker().fit(train_feature_df, train_labels) if not train_feature_df.empty else None
+    _log_stage("Ranker fit", stage_start)
 
     # inference recall on all-click history
+    stage_start = time.time()
     user_history = _build_history(all_click)
     test_users = test_df["user_id"].drop_duplicates().tolist()
     test_last_ts = _build_user_last_timestamp(all_click)
+    _log_stage("Test history build", stage_start)
+
+    stage_start = time.time()
     recallers = _fit_recall_models(
         history=user_history,
         topk_sim=topk_sim,
@@ -291,19 +348,25 @@ def build_baseline_submission(
         item_category=item_category,
         item_popularity=item_popularity,
         item_created_at=item_created_at,
-        youtube_dnn_use_deepmatch=youtube_dnn_use_deepmatch,
+        active_routes=active_routes,
         youtube_dnn_embedding_dim=youtube_dnn_embedding_dim,
         youtube_dnn_epochs=youtube_dnn_epochs,
         youtube_dnn_batch_size=youtube_dnn_batch_size,
     )
+    _log_stage("Test recall model fit", stage_start)
+
+    stage_start = time.time()
     test_candidates = _multi_recall(
         users=test_users,
         recallers=recallers,
         history=user_history,
         topk_recall=topk_recall,
-        route_weights=weights,
+        route_weights=active_weights,
         popular_items=hot_items,
     )
+    _log_stage("Test candidate recall", stage_start)
+
+    stage_start = time.time()
     test_feature_df = build_feature_dataframe(
         candidates_by_user=test_candidates,
         user_history=user_history,
@@ -313,7 +376,9 @@ def build_baseline_submission(
         item_popularity=item_popularity,
         user_last_ts=test_last_ts,
     )
+    _log_stage("Test feature build", stage_start)
 
+    stage_start = time.time()
     if ranker is not None and not test_feature_df.empty:
         ranked_df = ranker.predict(test_feature_df)
     else:
@@ -322,12 +387,16 @@ def build_baseline_submission(
             for article_id, score in cands:
                 rows.append((user_id, article_id, score))
         ranked_df = pd.DataFrame(rows, columns=["user_id", "article_id", "rank_score"])
+    _log_stage("Ranking", stage_start)
 
+    stage_start = time.time()
     submission = make_submission(ranked_df, topk=topk_submit)
 
     submit_path = os.path.join(output_dir, "submission_multi_recall_ranking.csv")
     submission.to_csv(submit_path, index=False)
     logger.info("Saved baseline submission to %s shape=%s", submit_path, submission.shape)
+    _log_stage("Submission export", stage_start)
+    _log_stage("Full pipeline", total_start)
     return submit_path
 
 
@@ -341,7 +410,7 @@ def main():
         topk_sim=args.topk_sim,
         popular_fill_k=args.popular_fill_k,
         recall_weights=args.recall_weights,
-        youtube_dnn_use_deepmatch=args.youtube_dnn_use_deepmatch,
+        max_train_users=args.max_train_users,
         youtube_dnn_embedding_dim=args.youtube_dnn_embedding_dim,
         youtube_dnn_epochs=args.youtube_dnn_epochs,
         youtube_dnn_batch_size=args.youtube_dnn_batch_size,

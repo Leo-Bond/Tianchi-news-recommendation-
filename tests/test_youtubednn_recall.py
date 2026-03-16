@@ -1,6 +1,12 @@
+import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.recall import YouTubeDNNRecall
 
@@ -19,16 +25,16 @@ class YouTubeDNNRecallTest(unittest.TestCase):
         }
 
     def test_proxy_backend_recall(self):
-        model = YouTubeDNNRecall(use_deepmatch=False).fit(self.history, self.embeddings)
+        model = YouTubeDNNRecall(training_epochs=1, batch_size=2).fit(self.history, self.embeddings)
         recalled = model.recall(1, topk=3)
+        self.assertEqual(model._backend, "pytorch")
         self.assertGreaterEqual(len(recalled), 1)
-        self.assertEqual(recalled[0][0], 104)
+        self.assertIn(recalled[0][0], {103, 104})
 
-    def test_deepmatch_flag_fallback_is_safe(self):
-        model = YouTubeDNNRecall(use_deepmatch=True, training_epochs=1).fit(
-            self.history, self.embeddings
-        )
+    def test_pytorch_backend_is_safe(self):
+        model = YouTubeDNNRecall(training_epochs=1, batch_size=2).fit(self.history, self.embeddings)
         recalled = model.recall(1, topk=3)
+        self.assertEqual(model._backend, "pytorch")
         self.assertIsInstance(recalled, list)
         self.assertGreaterEqual(len(recalled), 1)
 
