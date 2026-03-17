@@ -45,7 +45,7 @@ logger = get_logger(__name__, source_file=__file__)
 def parse_args():
     parser = argparse.ArgumentParser(description="Offline evaluation on train_click_log.csv")
     parser.add_argument("--data_dir", default="tcdata", help="Directory containing train_click_log.csv")
-    parser.add_argument("--topk_recall", type=int, default=50, help="Recall candidates per user")
+    parser.add_argument("--topk_recall", type=int, default=10, help="Recall candidates per user")
     parser.add_argument("--topk_sim", type=int, default=20, help="ItemCF top similar items kept per item")
     parser.add_argument("--popular_fill_k", type=int, default=200, help="Hot items pool size for fallback")
     parser.add_argument("--k", type=int, default=5, help="Metric cutoff k")

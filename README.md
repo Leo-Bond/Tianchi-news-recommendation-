@@ -1,122 +1,181 @@
 # Tianchi News Recommendation
 
-A clean, baseline-first framework for the [Tianchi News Recommendation competition](https://tianchi.aliyun.com/competition/entrance/531842/introduction).
+Solution for the Tianchi News Recommendation task.
 
 ## Overview
 
-The task is to predict the next article a user will click based on historical behaviour.
-This repo now supports a **multi-route recall + GBDT+LR ranking** framework:
+This repository implements a full pipeline:
 
-- Recall routes: ItemCF, YouTubeDNN (PyTorch user tower + fixed article embeddings), content similarity, hot/fresh
-- Ranking features: recall score, user-item embedding similarity, category match, publish time gap, article popularity, user recent interest distribution
-- Ranker: GBDT leaf features + LR final scoring (with deterministic fallback when sklearn is unavailable)
+1. Multi-route candidate recall
+2. Feature engineering
+3. Learning-to-rank scoring
+4. Submission export
 
-```
-Raw data  ──►  Multi-route recall merge  ──►  Feature engineering  ──►  GBDT+LR ranking  ──►  Submission
-```
+Current recall routes:
+
+- ItemCF
+- YouTubeDNN recall (PyTorch user tower + item vectors)
+- Content similarity recall
+- Hot/Fresh recall
+- Word2Vec recall
+- Bipartite network recall
+
+Ranking model behavior:
+
+- First choice: LightGBM LambdaRank
+- Fallback: sklearn GBDT+LR
+- Final fallback: deterministic linear score
 
 ## Project Structure
 
-```
+```text
 .
 ├── src/
-│   ├── __init__.py
-│   ├── main.py                # Multi-route recall + ranking entrypoint
-│   ├── multi_recall_ranking.py # Multi-route recall + GBDT+LR pipeline
-│   ├── baseline_itemcf.py     # ItemCF-only baseline pipeline
-│   ├── utils.py               # Logging, timing, pickle helpers
-│   ├── data_processing.py     # Load CSVs, split history / label
-│   ├── recall.py              # ItemCF implementation (+ optional UserCF/BPR)
-│   └── evaluate.py            # Submission export and metrics helpers
-├── requirements.txt
-└── README.md
+│   ├── main.py
+│   ├── multi_recall_ranking.py
+│   ├── offline_eval.py
+│   ├── ranking.py
+│   ├── recall.py
+│   ├── evaluate.py
+│   ├── baseline_itemcf.py
+│   ├── data_processing.py
+│   └── utils.py
+├── scripts/
+│   └── run_youtubednn_recall.py
+├── tcdata/
+├── output/
+└── requirements.txt
 ```
 
-## Quick Start
-
-### 1. Install dependencies
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-`ContentSimilarityRecall` and `YouTubeDNNRecall` will automatically use FAISS (`faiss-cpu`) for fast vector retrieval when available, and fallback to NumPy if FAISS is unavailable.
+## Data
 
-### 2. Prepare data
+Put data under `tcdata/` (or pass another `--data_dir`):
 
-Place the competition data under `tcdata/` (or your custom `--data_dir`):
+- `train_click_log.csv`
+- `testA_click_log.csv` 
+- `articles.csv` 
+- `articles_emb.csv` 
 
-| File | Description |
-|------|-------------|
-| `tcdata/train_click_log.csv` | Training user click logs |
-| `tcdata/testA_click_log.csv` | Test user click logs |
-| `tcdata/articles.csv` | Article meta-data (optional for baseline) |
+## Quick Start
 
-### 3. Run baseline submission
+### 1. Generate submission (main entry)
 
 ```bash
 python -m src.main --data_dir tcdata --output_dir output
 ```
 
-Saves `output/submission_multi_recall_ranking.csv`.
+Output:
 
-Run ItemCF-only baseline:
+- `output/submission_multi_recall_ranking.csv`
+
+Note:
+
+- `src.main` already includes ranking by default. There is no `--with_ranking` flag in `src.main`.
+
+### 2. ItemCF-only baseline
 
 ```bash
 python -m src.baseline_itemcf --data_dir tcdata --output_dir output
 ```
 
-Saves `output/submission_itemcf_baseline.csv`.
+Output:
 
-### 4. Offline test on train (leave-one-out)
+- `output/submission_itemcf_baseline.csv`
+
+### 3. Offline leave-one-out evaluation
+
+Without ranking:
 
 ```bash
-python -m src.offline_eval --data_dir tcdata --k 5
+python -m src.offline_eval --data_dir tcdata
 ```
 
-This uses `train_click_log.csv` only: for each user, the last click is treated as label and the earlier clicks are used as history.
+With ranking:
 
-## Module Reference
-
-### `src.recall`
-
-| Class | Description |
-|-------|-------------|
-| `ItemCF` | Item-based CF with IUF weighting and positional decay |
-| `UserCF` | User-based CF with IIF weighting |
-| `BPR` | Bayesian Personalised Ranking (SGD, latent factor model) |
-| `merge_recall_results()` | Weighted merge of multiple recall dicts |
-
-### `src.evaluate`
-
-| Function | Description |
-|----------|-------------|
-| `evaluate()` | MRR@k, Hit@k, NDCG@k across all users |
-| `make_submission()` | Wide-format submission DataFrame |
-
-## CLI Options
-
+```bash
+python -m src.offline_eval --data_dir tcdata --with_ranking
 ```
-python -m src.main [-h] [--data_dir DATA_DIR] [--output_dir OUTPUT_DIR]
-               [--topk_recall TOPK_RECALL]
-               [--topk_submit TOPK_SUBMIT]
-               [--topk_sim TOPK_SIM]
-               [--popular_fill_k POPULAR_FILL_K]
+
+### 4. Run YouTubeDNN recall only
+
+```bash
+python scripts/run_youtubednn_recall.py --data_dir tcdata --topk 10
 ```
+
+## Recall Weights
+
+`--recall_weights` supports 6 values.
+
+Route order is fixed as:
+
+1. itemcf
+2. youtube_dnn
+3. content
+4. hot_fresh
+5. w2v
+6. bipartite
+
+Examples:
+
+- `1,0,0,0,0,0` means ItemCF only.
+- `1,0,0,0,0,1` means ItemCF + Bipartite.
+
+The code normalizes weights internally.
+
+## Main CLI Options
+
+Command:
+
+```bash
+python -m src.main --help
+```
+
+Important options:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--data_dir` | `tcdata` | Directory with raw CSV files |
-| `--output_dir` | `output/` | Output artefacts directory |
-| `--topk_recall` | `50` | Recall candidates per user |
-| `--topk_submit` | `5` | Articles per user in submission |
-| `--topk_sim` | `10` | Similar items kept per clicked item |
-| `--popular_fill_k` | `100` | Hot-item pool size for recall fallback |
-| `--recall_weights` | `1,0,0,0` | Weights for ItemCF/YouTubeDNN/content/hot-fresh recall merge |
-| `--max_train_users` | `0` | Max training users used for ranking (`0` means all users) |
-| `--youtube_dnn_embedding_dim` | `128` | Hidden size for the PyTorch YouTubeDNN user tower |
-| `--youtube_dnn_epochs` | `1` | Training epochs for the PyTorch YouTubeDNN |
-| `--youtube_dnn_batch_size` | `256` | Training batch size for the PyTorch YouTubeDNN |
+| `--data_dir` | `tcdata` | Input data directory |
+| `--output_dir` | `output` | Output directory |
+| `--topk_recall` | `10` | Recall candidates per user |
+| `--topk_submit` | `5` | Final articles per user in submission |
+| `--topk_sim` | `10` | Top similar items kept per item for graph-based recall |
+| `--popular_fill_k` | `100` | Hot items pool used for recall fill |
+| `--recall_weights` | `1,0,0,0` | Multi-route recall weights (4/5/6 values) |
+| `--max_train_users` | `0` | Train-user cap for ranker data (`0` means all) |
+| `--youtube_dnn_embedding_dim` | `128` | YouTubeDNN hidden size |
+| `--youtube_dnn_epochs` | `1` | YouTubeDNN training epochs |
+| `--youtube_dnn_batch_size` | `256` | YouTubeDNN batch size |
+| `--youtube_dnn_faiss_ivf_nlist` | `4096` | IVF nlist for FAISS index |
+| `--youtube_dnn_faiss_ivf_nprobe` | `32` | IVF nprobe for FAISS search |
+| `--youtube_dnn_faiss_ivf_min_items` | `20000` | Minimum item count to enable IVF over FlatIP |
+
+## Offline Eval CLI Options
+
+Command:
+
+```bash
+python -m src.offline_eval --help
+```
+
+Key differences from main:
+
+- Supports `--with_ranking`.
+- Defaults to `--topk_recall 10`.
+- Uses only `train_click_log.csv` with leave-one-out labels.
+
+## Logs
+
+Runtime logs are written to `output/log/`, for example:
+
+- `output/log/multi_recall_ranking.log`
+- `output/log/offline_eval.log`
+- `output/log/recall.log`
 
 ## License
 
