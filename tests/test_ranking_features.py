@@ -46,7 +46,7 @@ class RankingFeatureTest(unittest.TestCase):
         self.assertAlmostEqual(row_101["article_popularity"], 1.0)
         self.assertGreater(row_101["embedding_sim"], 0.99)
 
-    def test_ranker_predict_returns_rank_score_with_fallback(self):
+    def test_ranker_predict_returns_recall_score_when_labels_are_single_class(self):
         feature_df = pd.DataFrame(
             [
                 {
@@ -71,10 +71,14 @@ class RankingFeatureTest(unittest.TestCase):
                 },
             ]
         )
-        labels = pd.DataFrame([{"user_id": 1, "article_id": 101, "label": 1}])
+        labels = pd.DataFrame(
+            [
+                {"user_id": 1, "article_id": 101, "label": 1},
+                {"user_id": 1, "article_id": 102, "label": 1},
+            ]
+        )
 
         ranker = GBDTLRRanker()
-        ranker._available = False
         ranker.fit(feature_df, labels)
         out = ranker.predict(feature_df)
         self.assertIn("rank_score", out.columns)
@@ -82,11 +86,14 @@ class RankingFeatureTest(unittest.TestCase):
         score_101 = out[out["article_id"] == 101]["rank_score"].iloc[0]
         score_102 = out[out["article_id"] == 102]["rank_score"].iloc[0]
         self.assertGreater(score_101, score_102)
+        self.assertAlmostEqual(score_101, 0.9)
+        self.assertAlmostEqual(score_102, 0.5)
 
-    def test_ranker_trains_sklearn_path_when_available(self):
-        ranker = GBDTLRRanker()
-        if not ranker._available:
-            self.skipTest("sklearn not available in environment")
+    def test_ranker_trains_lightgbm_when_available(self):
+        try:
+            ranker = GBDTLRRanker()
+        except ImportError:
+            self.skipTest("lightgbm not available in environment")
 
         feature_df = pd.DataFrame(
             [
@@ -103,7 +110,7 @@ class RankingFeatureTest(unittest.TestCase):
             ]
         )
         ranker.fit(feature_df, labels)
-        self.assertIsNotNone(ranker._lr)
+        self.assertIsNotNone(ranker._lgb_ranker)
         out = ranker.predict(feature_df)
         self.assertEqual(len(out), 4)
 

@@ -1,7 +1,6 @@
 """Feature engineering and ranking for candidate articles.
 
 Primary ranker: LightGBM LambdaRank (grouped by user).
-Fallbacks: sklearn GBDT+LR, then deterministic linear score.
 """
 
 from collections import Counter
@@ -79,7 +78,7 @@ def build_feature_dataframe(
 
 
 class GBDTLRRanker:
-    """LambdaRank-first ranker with sklearn/linear fallback."""
+    """LightGBM LambdaRank ranker with recall-score fallback for degenerate labels."""
 
     feature_cols = [
         "recall_score",
@@ -92,36 +91,16 @@ class GBDTLRRanker:
 
     def __init__(self):
         self._available = False
-        self._lgb_available = False
-        self._sk_available = False
-        self._backend = "linear"
+        self._backend = "recall_score"
         self._lgb_ranker = None
-        self._gbdt = None
-        self._lr = None
-        self._encoder = None
-        self._weights = np.array([0.30, 0.20, 0.10, -0.10, 0.15, 0.15], dtype=float)
 
         try:
             from lightgbm import LGBMRanker
 
             self._LGBMRanker = LGBMRanker
-            self._lgb_available = True
+            self._available = True
         except Exception:
-            self._lgb_available = False
-
-        try:
-            from sklearn.ensemble import GradientBoostingClassifier
-            from sklearn.linear_model import LogisticRegression
-            from sklearn.preprocessing import OneHotEncoder
-
-            self._GradientBoostingClassifier = GradientBoostingClassifier
-            self._LogisticRegression = LogisticRegression
-            self._OneHotEncoder = OneHotEncoder
-            self._sk_available = True
-        except Exception:
-            self._sk_available = False
-
-        self._available = self._lgb_available or self._sk_available
+            raise ImportError("lightgbm is required for GBDTLRRanker")
 
     def fit(self, feature_df, label_df):
         merged = feature_df.merge(label_df, on=["user_id", "article_id"], how="left")
@@ -129,7 +108,7 @@ class GBDTLRRanker:
         y = merged["label"].fillna(0).astype(int).values
         x = merged[self.feature_cols].fillna(0.0).values
 
-        if self._lgb_available and np.unique(y).size > 1 and len(merged) > 0:
+        if np.unique(y).size > 1 and len(merged) > 0:
             groups = merged.groupby("user_id", sort=False).size().tolist()
             if groups and max(groups) > 1:
                 self._lgb_ranker = self._LGBMRanker(
@@ -144,28 +123,6 @@ class GBDTLRRanker:
                 )
                 self._lgb_ranker.fit(x, y, group=groups)
                 self._backend = "lgbm_lambdarank"
-                self._lr = self._lgb_ranker
-                return self
-
-        if self._sk_available and np.unique(y).size > 1:
-            self._gbdt = self._GradientBoostingClassifier(
-                n_estimators=60,
-                learning_rate=0.05,
-                max_depth=3,
-                random_state=42,
-            )
-            self._gbdt.fit(x, y)
-            leaves = self._gbdt.apply(x)
-            if leaves.ndim == 3:
-                leaves = leaves[:, :, 0]
-            self._encoder = self._OneHotEncoder(handle_unknown="ignore")
-            leaf_sparse = self._encoder.fit_transform(leaves)
-            from scipy import sparse
-
-            design = sparse.hstack([x, leaf_sparse], format="csr")
-            self._lr = self._LogisticRegression(max_iter=300)
-            self._lr.fit(design, y)
-            self._backend = "sk_gbdt_lr"
         return self
 
     def predict(self, feature_df):
@@ -176,29 +133,7 @@ class GBDTLRRanker:
             out["rank_score"] = pred
             return out
 
-        if self._lr is not None and self._gbdt is not None and self._encoder is not None:
-            leaves = self._gbdt.apply(x)
-            if leaves.ndim == 3:
-                leaves = leaves[:, :, 0]
-            from scipy import sparse
-
-            leaf_sparse = self._encoder.transform(leaves)
-            design = sparse.hstack([x, leaf_sparse], format="csr")
-            proba = self._lr.predict_proba(design)[:, 1]
-            out = feature_df[["user_id", "article_id"]].copy()
-            out["rank_score"] = proba
-            return out
-
-        scaled = x.copy()
-        if scaled.size:
-            for col_idx in range(scaled.shape[1]):
-                col = scaled[:, col_idx]
-                mn, mx = col.min(), col.max()
-                denom = (mx - mn) if mx != mn else 1.0
-                scaled[:, col_idx] = (col - mn) / denom
-            score = np.dot(scaled, self._weights)
-        else:
-            score = np.array([])
         out = feature_df[["user_id", "article_id"]].copy()
-        out["rank_score"] = score
+        # When LambdaRank cannot be fit (e.g., single-class labels), keep recall ordering.
+        out["rank_score"] = feature_df["recall_score"].astype(float).values
         return out

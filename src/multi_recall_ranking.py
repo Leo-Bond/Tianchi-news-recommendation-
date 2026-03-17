@@ -1,4 +1,4 @@
-"""Multi-route recall + GBDT+LR ranking pipeline for Tianchi news recommendation.
+"""Multi-route recall + LightGBM LambdaRank pipeline for Tianchi news recommendation.
 
 Usage
 -----

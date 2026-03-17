@@ -12,7 +12,7 @@ from src.multi_recall_ranking import build_baseline_submission
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Multi-route recall + GBDT+LR ranking pipeline")
+    parser = argparse.ArgumentParser(description="Multi-route recall + LightGBM LambdaRank pipeline")
     parser.add_argument("--data_dir", default="tcdata", help="Directory containing click logs")
     parser.add_argument("--output_dir", default="output", help="Directory to save submission")
     parser.add_argument(
