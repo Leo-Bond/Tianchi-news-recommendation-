@@ -1,4 +1,8 @@
-"""Feature engineering and GBDT+LR ranking for candidate articles."""
+"""Feature engineering and ranking for candidate articles.
+
+Primary ranker: LightGBM LambdaRank (grouped by user).
+Fallbacks: sklearn GBDT+LR, then deterministic linear score.
+"""
 
 from collections import Counter
 
@@ -75,7 +79,7 @@ def build_feature_dataframe(
 
 
 class GBDTLRRanker:
-    """GBDT + LR ranker with deterministic linear fallback."""
+    """LambdaRank-first ranker with sklearn/linear fallback."""
 
     feature_cols = [
         "recall_score",
@@ -88,10 +92,23 @@ class GBDTLRRanker:
 
     def __init__(self):
         self._available = False
+        self._lgb_available = False
+        self._sk_available = False
+        self._backend = "linear"
+        self._lgb_ranker = None
         self._gbdt = None
         self._lr = None
         self._encoder = None
         self._weights = np.array([0.30, 0.20, 0.10, -0.10, 0.15, 0.15], dtype=float)
+
+        try:
+            from lightgbm import LGBMRanker
+
+            self._LGBMRanker = LGBMRanker
+            self._lgb_available = True
+        except Exception:
+            self._lgb_available = False
+
         try:
             from sklearn.ensemble import GradientBoostingClassifier
             from sklearn.linear_model import LogisticRegression
@@ -100,16 +117,37 @@ class GBDTLRRanker:
             self._GradientBoostingClassifier = GradientBoostingClassifier
             self._LogisticRegression = LogisticRegression
             self._OneHotEncoder = OneHotEncoder
-            self._available = True
+            self._sk_available = True
         except Exception:
-            self._available = False
+            self._sk_available = False
+
+        self._available = self._lgb_available or self._sk_available
 
     def fit(self, feature_df, label_df):
         merged = feature_df.merge(label_df, on=["user_id", "article_id"], how="left")
+        merged = merged.sort_values(["user_id", "article_id"]).reset_index(drop=True)
         y = merged["label"].fillna(0).astype(int).values
         x = merged[self.feature_cols].fillna(0.0).values
 
-        if self._available and np.unique(y).size > 1:
+        if self._lgb_available and np.unique(y).size > 1 and len(merged) > 0:
+            groups = merged.groupby("user_id", sort=False).size().tolist()
+            if groups and max(groups) > 1:
+                self._lgb_ranker = self._LGBMRanker(
+                    objective="lambdarank",
+                    metric="ndcg",
+                    ndcg_eval_at=[5],
+                    learning_rate=0.05,
+                    n_estimators=200,
+                    num_leaves=31,
+                    min_child_samples=20,
+                    random_state=42,
+                )
+                self._lgb_ranker.fit(x, y, group=groups)
+                self._backend = "lgbm_lambdarank"
+                self._lr = self._lgb_ranker
+                return self
+
+        if self._sk_available and np.unique(y).size > 1:
             self._gbdt = self._GradientBoostingClassifier(
                 n_estimators=60,
                 learning_rate=0.05,
@@ -127,10 +165,17 @@ class GBDTLRRanker:
             design = sparse.hstack([x, leaf_sparse], format="csr")
             self._lr = self._LogisticRegression(max_iter=300)
             self._lr.fit(design, y)
+            self._backend = "sk_gbdt_lr"
         return self
 
     def predict(self, feature_df):
         x = feature_df[self.feature_cols].fillna(0.0).values
+        if self._lgb_ranker is not None:
+            pred = self._lgb_ranker.predict(x)
+            out = feature_df[["user_id", "article_id"]].copy()
+            out["rank_score"] = pred
+            return out
+
         if self._lr is not None and self._gbdt is not None and self._encoder is not None:
             leaves = self._gbdt.apply(x)
             if leaves.ndim == 3:

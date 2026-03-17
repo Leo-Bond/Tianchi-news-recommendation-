@@ -14,7 +14,9 @@ try:
     from .data_processing import load_click_log, split_last_click, build_user_click_history
     from .ranking import GBDTLRRanker, build_feature_dataframe
     from .recall import (
+        BipartiteNetworkRecall,
         ItemCF,
+        Word2VecRecall,
         YouTubeDNNRecall,
         ContentSimilarityRecall,
         HotFreshRecall,
@@ -26,7 +28,9 @@ except ImportError:
     from data_processing import load_click_log, split_last_click, build_user_click_history
     from ranking import GBDTLRRanker, build_feature_dataframe
     from recall import (
+        BipartiteNetworkRecall,
         ItemCF,
+        Word2VecRecall,
         YouTubeDNNRecall,
         ContentSimilarityRecall,
         HotFreshRecall,
@@ -48,11 +52,14 @@ def parse_args():
     parser.add_argument(
         "--recall_weights",
         default="1,0,0,0",
-        help="Weights for itemcf,youtube_dnn,content,hot_fresh recalls",
+        help="Weights for itemcf,youtube_dnn,content,hot_fresh,w2v,bipartite recalls (4/5/6-value inputs are supported)",
     )
     parser.add_argument("--youtube_dnn_embedding_dim", type=int, default=128, help="Hidden size for YouTubeDNN")
     parser.add_argument("--youtube_dnn_epochs", type=int, default=1, help="Training epochs for YouTubeDNN")
     parser.add_argument("--youtube_dnn_batch_size", type=int, default=256, help="Batch size for YouTubeDNN")
+    parser.add_argument("--youtube_dnn_faiss_ivf_nlist", type=int, default=4096, help="FAISS IVF nlist for YouTubeDNN recall")
+    parser.add_argument("--youtube_dnn_faiss_ivf_nprobe", type=int, default=32, help="FAISS IVF nprobe for YouTubeDNN recall")
+    parser.add_argument("--youtube_dnn_faiss_ivf_min_items", type=int, default=20000, help="Minimum item count to enable IVF instead of FlatIP")
     parser.add_argument(
         "--with_ranking",
         action="store_true",
@@ -61,7 +68,7 @@ def parse_args():
     parser.add_argument(
         "--max_train_users",
         type=int,
-        default=20000,
+        default=0,
         help="Maximum users used to train offline ranker (0 means all)",
     )
     return parser.parse_args()
@@ -73,18 +80,22 @@ def _popular_items(click_df, k):
 
 def _parse_weights(weight_text):
     weights = [float(x) for x in weight_text.split(",") if x.strip()]
-    if len(weights) != 4:
-        logger.warning("Invalid --recall_weights '%s', fallback to 1,0,0,0", weight_text)
-        return [1.0, 0.0, 0.0, 0.0]
+    if len(weights) == 4:
+        weights.extend([0.0, 0.0])
+    elif len(weights) == 5:
+        weights.append(0.0)
+    if len(weights) != 6:
+        logger.warning("Invalid --recall_weights '%s', fallback to 1,0,0,0,0,0", weight_text)
+        return [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     total = sum(weights)
     if total <= 0:
-        logger.warning("Non-positive --recall_weights sum, fallback to 1,0,0,0")
-        return [1.0, 0.0, 0.0, 0.0]
+        logger.warning("Non-positive --recall_weights sum, fallback to 1,0,0,0,0,0")
+        return [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     return [w / total for w in weights]
 
 
 def _active_routes(weights):
-    route_names = ["itemcf", "youtube_dnn", "content", "hot_fresh"]
+    route_names = ["itemcf", "youtube_dnn", "content", "hot_fresh", "w2v", "bipartite"]
     return [(name, weight) for name, weight in zip(route_names, weights) if weight > 0]
 
 
@@ -99,17 +110,27 @@ def _fit_recall_models(
     youtube_dnn_embedding_dim=128,
     youtube_dnn_epochs=1,
     youtube_dnn_batch_size=256,
+    youtube_dnn_faiss_ivf_nlist=4096,
+    youtube_dnn_faiss_ivf_nprobe=32,
+    youtube_dnn_faiss_ivf_min_items=20000,
 ):
     recallers = []
     for route_name, _ in active_routes:
         if route_name == "itemcf":
             recallers.append(ItemCF(topk_sim=topk_sim).fit(history))
+        elif route_name == "bipartite":
+            recallers.append(BipartiteNetworkRecall(topk_sim=topk_sim, use_iif=True).fit(history))
+        elif route_name == "w2v":
+            recallers.append(Word2VecRecall().fit(history))
         elif route_name == "youtube_dnn":
             recallers.append(
                 YouTubeDNNRecall(
                     embedding_dim=youtube_dnn_embedding_dim,
                     training_epochs=youtube_dnn_epochs,
                     batch_size=youtube_dnn_batch_size,
+                    faiss_ivf_nlist=youtube_dnn_faiss_ivf_nlist,
+                    faiss_ivf_nprobe=youtube_dnn_faiss_ivf_nprobe,
+                    faiss_ivf_min_items=youtube_dnn_faiss_ivf_min_items,
                 ).fit(history, item_embeddings=item_embeddings)
             )
         elif route_name == "content":
@@ -165,8 +186,11 @@ def run_offline_eval(
     youtube_dnn_embedding_dim=128,
     youtube_dnn_epochs=1,
     youtube_dnn_batch_size=256,
+    youtube_dnn_faiss_ivf_nlist=4096,
+    youtube_dnn_faiss_ivf_nprobe=32,
+    youtube_dnn_faiss_ivf_min_items=20000,
     with_ranking=False,
-    max_train_users=20000,
+    max_train_users=0,
 ):
     train_path = os.path.join(data_dir, "train_click_log.csv")
     train_df = load_click_log(train_path)
@@ -210,6 +234,9 @@ def run_offline_eval(
         youtube_dnn_embedding_dim=youtube_dnn_embedding_dim,
         youtube_dnn_epochs=youtube_dnn_epochs,
         youtube_dnn_batch_size=youtube_dnn_batch_size,
+        youtube_dnn_faiss_ivf_nlist=youtube_dnn_faiss_ivf_nlist,
+        youtube_dnn_faiss_ivf_nprobe=youtube_dnn_faiss_ivf_nprobe,
+        youtube_dnn_faiss_ivf_min_items=youtube_dnn_faiss_ivf_min_items,
     )
 
     users = label_df["user_id"].drop_duplicates().tolist()
@@ -217,8 +244,10 @@ def run_offline_eval(
         users = users[:max_train_users]
         logger.info("Offline eval users truncated to %d for ranking", len(users))
     rows = []
+    total_users = len(users)
+    logger.info("Start offline recall for %d users", total_users)
 
-    for user_id in users:
+    for idx, user_id in enumerate(users, start=1):
         route_results = [{user_id: rec.recall(user_id, topk=topk_recall)} for rec in recallers]
         merged = merge_recall_results(route_results, weights=active_weights).get(user_id, [])
         merged = merged[:topk_recall]
@@ -237,6 +266,9 @@ def run_offline_eval(
 
         for article_id, score in merged:
             rows.append((user_id, article_id, score))
+
+        if idx % 2000 == 0 or idx == total_users:
+            logger.info("Offline recall progress: %d/%d users", idx, total_users)
 
     ranked_df = pd.DataFrame(rows, columns=["user_id", "article_id", "rank_score"])
 
@@ -264,7 +296,7 @@ def run_offline_eval(
             labels["label"] = 1
             ranker = GBDTLRRanker().fit(feature_df, labels)
             ranked_df = ranker.predict(feature_df)
-            logger.info("Applied GBDT+LR ranking for offline eval")
+            logger.info("Applied ranking model for offline eval")
         else:
             logger.warning("Ranking skipped: empty feature dataframe")
 
@@ -289,6 +321,9 @@ def main():
         youtube_dnn_embedding_dim=args.youtube_dnn_embedding_dim,
         youtube_dnn_epochs=args.youtube_dnn_epochs,
         youtube_dnn_batch_size=args.youtube_dnn_batch_size,
+        youtube_dnn_faiss_ivf_nlist=args.youtube_dnn_faiss_ivf_nlist,
+        youtube_dnn_faiss_ivf_nprobe=args.youtube_dnn_faiss_ivf_nprobe,
+        youtube_dnn_faiss_ivf_min_items=args.youtube_dnn_faiss_ivf_min_items,
         with_ranking=args.with_ranking,
         max_train_users=args.max_train_users,
     )

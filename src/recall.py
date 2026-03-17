@@ -3,8 +3,10 @@
 Available strategies
 --------------------
 ItemCF  – item-based collaborative filtering using co-click similarity.
+BipartiteNetworkRecall – item-item projection recall on user-item bipartite graph.
 UserCF  – user-based collaborative filtering.
 BPR     – Bayesian Personalised Ranking (matrix factorisation variant).
+Word2VecRecall – sequence-based item embedding recall via gensim Word2Vec.
 YouTubeDNNRecall       – embedding two-tower proxy recall.
 ContentSimilarityRecall – article-content similarity recall.
 HotFreshRecall         – popularity + freshness recall.
@@ -14,6 +16,7 @@ Each strategy exposes a ``recall(user_id, topk)`` method and returns a list of
 """
 
 import math
+import os
 from collections import defaultdict
 
 import numpy as np
@@ -112,6 +115,99 @@ class ItemCF:
                 scores[sim_item] += sim_score * recency_weight
 
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:topk]
+
+
+class BipartiteNetworkRecall:
+    """Bipartite graph projection recall with IIF/IUF style weighting.
+
+    The similarity formula follows:
+      w(i, j) += 1 / (log(|U_i| + 1) * log(|I_u| + 1))
+    where |U_i| is the number of users clicked item i and |I_u| is the number
+    of items clicked by user u.
+    """
+
+    def __init__(
+        self,
+        topk_sim=20,
+        recency_decay=0.7,
+        use_iif=True,
+        use_last_click_only=True,
+    ):
+        self.topk_sim = int(topk_sim)
+        self.recency_decay = float(recency_decay)
+        self.use_iif = bool(use_iif)
+        self.use_last_click_only = bool(use_last_click_only)
+        self.user_history = {}
+        self.item_sim = {}
+
+    @timer
+    def fit(self, click_history):
+        self.user_history = click_history
+        user_item_dict = {u: set(items) for u, items in click_history.items() if items}
+
+        item_user_dict = defaultdict(set)
+        for user_id, items in user_item_dict.items():
+            for item in items:
+                item_user_dict[item].add(user_id)
+
+        sim_item = {}
+        for item, users in item_user_dict.items():
+            sim_item.setdefault(item, {})
+            item_user_count = len(users)
+            item_user_penalty = math.log(item_user_count + 1.0)
+
+            for user_id in users:
+                user_items = user_item_dict.get(user_id, set())
+                user_item_count = len(user_items)
+                if user_item_count <= 0:
+                    continue
+
+                if self.use_iif:
+                    denom = item_user_penalty * math.log(user_item_count + 1.0)
+                    increment = 1.0 / denom if denom > 0 else 0.0
+                else:
+                    increment = 1.0
+
+                for related_item in user_items:
+                    if related_item == item:
+                        continue
+                    sim_item[item].setdefault(related_item, 0.0)
+                    sim_item[item][related_item] += increment
+
+        self.item_sim = {}
+        for item, related in sim_item.items():
+            ranked = sorted(related.items(), key=lambda x: x[1], reverse=True)
+            if self.topk_sim > 0:
+                ranked = ranked[: self.topk_sim]
+            self.item_sim[item] = dict(ranked)
+
+        logger.info("BipartiteNetworkRecall: built similarity for %d items", len(self.item_sim))
+        return self
+
+    def recall(self, user_id, topk=50):
+        history = self.user_history.get(user_id, [])
+        if not history:
+            return []
+
+        seen = set(history)
+        scores = defaultdict(float)
+        if self.use_last_click_only:
+            anchor = history[-1]
+            for related_item, sim_score in self.item_sim.get(anchor, {}).items():
+                if related_item in seen:
+                    continue
+                scores[related_item] += float(sim_score)
+            return sorted(scores.items(), key=lambda x: x[1], reverse=True)[: int(topk)]
+
+        n = len(history)
+        for idx, item in enumerate(history):
+            recency_weight = self.recency_decay ** (n - 1 - idx)
+            for related_item, sim_score in self.item_sim.get(item, {}).items():
+                if related_item in seen:
+                    continue
+                scores[related_item] += float(sim_score) * recency_weight
+
+        return sorted(scores.items(), key=lambda x: x[1], reverse=True)[: int(topk)]
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +392,126 @@ class BPR:
         ]
 
 
+class Word2VecRecall:
+    """Word2Vec-based recall trained on user click sequences."""
+
+    def __init__(
+        self,
+        vector_size=256,
+        window=3,
+        min_count=1,
+        sg=1,
+        hs=0,
+        seed=2026,
+        negative=5,
+        workers=10,
+        epochs=1,
+    ):
+        self.vector_size = int(vector_size)
+        self.window = int(window)
+        self.min_count = int(min_count)
+        self.sg = int(sg)
+        self.hs = int(hs)
+        self.seed = int(seed)
+        self.negative = int(negative)
+        self.workers = int(workers)
+        self.epochs = int(epochs)
+        self.user_history = {}
+        self._wv = None
+        self._backend = "unavailable"
+
+    def fit(self, click_history):
+        self.user_history = click_history
+        self._wv = None
+        self._backend = "unavailable"
+
+        try:
+            from gensim.models import Word2Vec
+        except Exception as exc:
+            logger.warning("Word2VecRecall unavailable: gensim import failed: %s", exc)
+            return self
+
+        sentences = []
+        for items in click_history.values():
+            if not items:
+                continue
+            sentence = [str(item) for item in items]
+            if sentence:
+                sentences.append(sentence)
+
+        if not sentences:
+            logger.warning("Word2VecRecall skipped: no valid training sequences")
+            return self
+
+        try:
+            model = Word2Vec(
+                sentences=sentences,
+                vector_size=self.vector_size,
+                window=self.window,
+                min_count=self.min_count,
+                sg=self.sg,
+                hs=self.hs,
+                seed=self.seed,
+                negative=self.negative,
+                workers=self.workers,
+                epochs=self.epochs,
+            )
+        except TypeError:
+            model = Word2Vec(
+                sentences=sentences,
+                size=self.vector_size,
+                window=self.window,
+                min_count=self.min_count,
+                sg=self.sg,
+                hs=self.hs,
+                seed=self.seed,
+                negative=self.negative,
+                workers=self.workers,
+                iter=self.epochs,
+            )
+
+        self._wv = model.wv
+        self._backend = "gensim"
+        logger.info(
+            "Word2VecRecall: trained vocab=%d vector_size=%d window=%d epochs=%d",
+            len(self._wv),
+            self.vector_size,
+            self.window,
+            self.epochs,
+        )
+        return self
+
+    def recall(self, user_id, topk=50):
+        topk = int(topk)
+        if topk <= 0 or self._wv is None:
+            return []
+
+        history = self.user_history.get(user_id, [])
+        if not history:
+            return []
+
+        anchor = str(history[-1])
+        if anchor not in self._wv:
+            return []
+
+        seen = {str(item) for item in history}
+        search_topn = min(len(self._wv), max(topk * 20, len(seen) + topk + 50))
+        similar = self._wv.most_similar(anchor, topn=search_topn)
+
+        candidates = []
+        for token, score in similar:
+            if token in seen:
+                continue
+            try:
+                article_id = int(token)
+            except Exception:
+                continue
+            candidates.append((article_id, float(score)))
+            if len(candidates) >= topk:
+                break
+        return candidates
+
+
 class YouTubeDNNRecall:
     """PyTorch YouTubeDNN-style recall with a learned user tower and fixed item embeddings."""
 
@@ -305,13 +521,17 @@ class YouTubeDNNRecall:
         embedding_dim=128,
         training_epochs=1,
         batch_size=256,
+        faiss_ivf_nlist=4096,
+        faiss_ivf_nprobe=32,
+        faiss_ivf_min_items=20000,
     ):
-        if recency_decay <= 0 or recency_decay > 1:
-            raise ValueError("recency_decay must be greater than 0 and less than or equal to 1.")
         self.recency_decay = recency_decay
         self.embedding_dim = embedding_dim
         self.training_epochs = training_epochs
         self.batch_size = batch_size
+        self.faiss_ivf_nlist = int(faiss_ivf_nlist)
+        self.faiss_ivf_nprobe = int(faiss_ivf_nprobe)
+        self.faiss_ivf_min_items = int(faiss_ivf_min_items)
         self.user_history = {}
         self.item_embeddings = {}
         self._all_items = []
@@ -321,16 +541,75 @@ class YouTubeDNNRecall:
         self._item_ids = []
         self._torch_model = None
         self._torch_device = "cpu"
+        self._faiss_index = None
+        self._use_faiss = False
+        self._faiss_mode = "none"
 
     def fit(self, click_history, item_embeddings):
         self.user_history = click_history
         self.item_embeddings = item_embeddings or {}
         self._all_items = list(self.item_embeddings.keys())
         self._backend = "unavailable"
+        self._faiss_index = None
+        self._use_faiss = False
+        self._faiss_mode = "none"
         ok = self._fit_torch(click_history)
         if ok:
             self._backend = "pytorch"
+            self._build_faiss_index()
         return self
+
+    def _build_faiss_index(self):
+        if self._item_matrix is None or self._item_matrix.size == 0:
+            return
+        try:
+            if os.name == "nt":
+                os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+                os.environ.setdefault("FAISS_NO_AVX2", "1")
+            import faiss
+
+            dim = int(self._item_matrix.shape[1])
+            total_items = int(len(self._item_ids))
+            item_matrix = self._item_matrix.astype(np.float32)
+
+            use_ivf = total_items >= max(1, self.faiss_ivf_min_items)
+            if os.name == "nt" and use_ivf:
+                logger.warning(
+                    "YouTubeDNNRecall: IVF is disabled on Windows for stability; fallback to FAISS FlatIP."
+                )
+                use_ivf = False
+            if use_ivf:
+                nlist = max(1, min(int(self.faiss_ivf_nlist), total_items))
+                quantizer = faiss.IndexFlatIP(dim)
+                index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+                index.train(item_matrix)
+                index.add(item_matrix)
+                index.nprobe = max(1, min(int(self.faiss_ivf_nprobe), nlist))
+                self._faiss_mode = "ivf"
+                self._faiss_index = index
+                self._use_faiss = True
+                logger.info(
+                    "YouTubeDNNRecall: FAISS IVF backend enabled (items=%d, dim=%d, nlist=%d, nprobe=%d)",
+                    total_items,
+                    dim,
+                    nlist,
+                    int(index.nprobe),
+                )
+                return
+
+            index = faiss.IndexFlatIP(dim)
+            index.add(item_matrix)
+            self._faiss_index = index
+            self._use_faiss = True
+            self._faiss_mode = "flat"
+            logger.info(
+                "YouTubeDNNRecall: FAISS FlatIP backend enabled (items=%d, dim=%d)",
+                total_items,
+                dim,
+            )
+        except Exception as exc:
+            self._faiss_mode = "none"
+            logger.info("YouTubeDNNRecall: FAISS unavailable, fallback to NumPy backend: %s", exc)
 
     def _fit_torch(self, click_history):
         try:
@@ -430,6 +709,9 @@ class YouTubeDNNRecall:
         return safe_normalize(np.mean(weighted_vectors, axis=0)).astype(np.float32)
 
     def recall(self, user_id, topk=50):
+        topk = int(topk)
+        if topk <= 0:
+            return []
         if self._backend != "pytorch" or self._torch_model is None or self._item_matrix is None:
             return []
 
@@ -448,8 +730,33 @@ class YouTubeDNNRecall:
             user_tensor = torch.tensor(user_hist_vec, dtype=torch.float32, device=self._torch_device).unsqueeze(0)
             user_vec = F.normalize(self._torch_model(user_tensor), p=2, dim=1).cpu().numpy()[0]
 
-        sim = self._item_matrix.dot(user_vec)
         seen = set(history)
+        if self._use_faiss and self._faiss_index is not None:
+            total_items = len(self._item_ids)
+            if total_items <= 0:
+                return []
+            if self._faiss_mode == "ivf":
+                search_k = min(total_items, max(topk * 80, len(history) + topk + 100))
+            else:
+                search_k = min(total_items, max(topk * 50, len(history) + topk + 100))
+            query = np.asarray(user_vec, dtype=np.float32).reshape(1, -1)
+            sim_values, indices = self._faiss_index.search(query, search_k)
+
+            candidates = []
+            for raw_score, raw_idx in zip(sim_values[0], indices[0]):
+                idx = int(raw_idx)
+                if idx < 0 or idx >= total_items:
+                    continue
+                item_id = self._item_ids[idx]
+                if item_id in seen:
+                    continue
+                candidates.append((item_id, float(raw_score)))
+            if not candidates:
+                return []
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            return candidates[:topk]
+
+        sim = self._item_matrix.dot(user_vec)
         candidates = []
         for item_id, score in zip(self._item_ids, sim):
             if item_id in seen:
@@ -475,34 +782,115 @@ class ContentSimilarityRecall:
         self.user_history = {}
         self.item_embeddings = {}
         self.item_category = {}
+        self._item_ids = []
+        self._item_index = {}
+        self._item_matrix = None
+        self._item_category_array = None
+        self._faiss_index = None
+        self._use_faiss = False
 
     def fit(self, click_history, item_embeddings, item_category):
         self.user_history = click_history
         self.item_embeddings = item_embeddings or {}
         self.item_category = item_category or {}
+
+        self._item_ids = sorted(self.item_embeddings.keys())
+        self._item_index = {item_id: idx for idx, item_id in enumerate(self._item_ids)}
+        if self._item_ids:
+            self._item_matrix = np.stack(
+                [safe_normalize(np.asarray(self.item_embeddings[item_id], dtype=np.float32)) for item_id in self._item_ids]
+            )
+            self._item_category_array = np.asarray(
+                [int(self.item_category.get(item_id, -1)) for item_id in self._item_ids],
+                dtype=np.int64,
+            )
+        else:
+            self._item_matrix = None
+            self._item_category_array = None
+
+        self._faiss_index = None
+        self._use_faiss = False
+        if self._item_matrix is not None and self._item_matrix.size:
+            try:
+                import faiss
+
+                dim = int(self._item_matrix.shape[1])
+                index = faiss.IndexFlatIP(dim)
+                index.add(self._item_matrix.astype(np.float32))
+                self._faiss_index = index
+                self._use_faiss = True
+                logger.info(
+                    "ContentSimilarityRecall: FAISS backend enabled (items=%d, dim=%d)",
+                    len(self._item_ids),
+                    dim,
+                )
+            except Exception as exc:
+                logger.info("ContentSimilarityRecall: FAISS unavailable, fallback to NumPy backend: %s", exc)
         return self
 
     def recall(self, user_id, topk=50):
+        topk = int(topk)
+        if topk <= 0:
+            return []
         history = self.user_history.get(user_id, [])
         if not history:
             return []
         anchor = history[-1]
         anchor_vec = self.item_embeddings.get(anchor)
-        if anchor_vec is None:
+        if anchor_vec is None or self._item_matrix is None:
             return []
         anchor_vec = safe_normalize(anchor_vec)
         anchor_cat = self.item_category.get(anchor)
         seen = set(history)
-        scores = []
-        for item, emb in self.item_embeddings.items():
-            if item in seen:
-                continue
-            cos = float(np.dot(anchor_vec, safe_normalize(emb)))
-            same_category = anchor_cat is not None and self.item_category.get(item) == anchor_cat
-            cat_bonus = self.category_bonus if same_category else 0.0
-            scores.append((item, cos + cat_bonus))
-        scores.sort(key=lambda x: x[1], reverse=True)
-        return scores[:topk]
+
+        if self._use_faiss and self._faiss_index is not None:
+            total_items = len(self._item_ids)
+            if total_items <= 0:
+                return []
+            search_k = min(total_items, max(topk * 50, len(history) + topk + 100))
+            query = np.asarray(anchor_vec, dtype=np.float32).reshape(1, -1)
+            sim_values, indices = self._faiss_index.search(query, search_k)
+
+            candidates = []
+            for raw_score, raw_idx in zip(sim_values[0], indices[0]):
+                idx = int(raw_idx)
+                if idx < 0 or idx >= total_items:
+                    continue
+                item_id = self._item_ids[idx]
+                if item_id in seen:
+                    continue
+                score = float(raw_score)
+                if (
+                    anchor_cat is not None
+                    and self._item_category_array is not None
+                    and self._item_category_array[idx] == int(anchor_cat)
+                    and self.category_bonus
+                ):
+                    score += float(self.category_bonus)
+                candidates.append((item_id, score))
+
+            if not candidates:
+                return []
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            return candidates[:topk]
+
+        scores = self._item_matrix.dot(np.asarray(anchor_vec, dtype=np.float32))
+        if anchor_cat is not None and self._item_category_array is not None and self.category_bonus:
+            scores = scores + (self._item_category_array == int(anchor_cat)) * float(self.category_bonus)
+
+        seen_indices = [self._item_index[item_id] for item_id in seen if item_id in self._item_index]
+        if seen_indices:
+            scores = scores.copy()
+            scores[np.asarray(seen_indices, dtype=np.int64)] = -np.inf
+
+        available = int(np.isfinite(scores).sum())
+        if available <= 0:
+            return []
+
+        k = min(int(topk), available)
+        top_indices = np.argpartition(scores, -k)[-k:]
+        top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
+        return [(self._item_ids[idx], float(scores[idx])) for idx in top_indices if np.isfinite(scores[idx])]
 
 
 class HotFreshRecall:

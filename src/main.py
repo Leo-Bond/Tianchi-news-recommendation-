@@ -37,17 +37,20 @@ def parse_args():
     parser.add_argument(
         "--recall_weights",
         default="1,0,0,0",
-        help="Weights for itemcf,youtube_dnn,content,hot_fresh recalls. Default is lightweight ItemCF-only.",
+        help="Weights for itemcf,youtube_dnn,content,hot_fresh,w2v,bipartite recalls. 4/5/6-value inputs are supported.",
     )
     parser.add_argument(
         "--max_train_users",
         type=int,
-        default=20000,
-        help="Maximum number of training users used to build ranker candidates. Default is lightweight.",
+        default=0,
+        help="Maximum number of training users used to build ranker candidates (0 means all users).",
     )
     parser.add_argument("--youtube_dnn_embedding_dim", type=int, default=128, help="Hidden size for the PyTorch YouTubeDNN user tower")
     parser.add_argument("--youtube_dnn_epochs", type=int, default=1, help="Training epochs for the PyTorch YouTubeDNN")
     parser.add_argument("--youtube_dnn_batch_size", type=int, default=256, help="Batch size for the PyTorch YouTubeDNN")
+    parser.add_argument("--youtube_dnn_faiss_ivf_nlist", type=int, default=4096, help="FAISS IVF nlist for YouTubeDNN recall")
+    parser.add_argument("--youtube_dnn_faiss_ivf_nprobe", type=int, default=32, help="FAISS IVF nprobe for YouTubeDNN recall")
+    parser.add_argument("--youtube_dnn_faiss_ivf_min_items", type=int, default=20000, help="Minimum item count to enable IVF instead of FlatIP")
     return parser.parse_args()
 
 
@@ -65,6 +68,9 @@ def main():
         youtube_dnn_embedding_dim=args.youtube_dnn_embedding_dim,
         youtube_dnn_epochs=args.youtube_dnn_epochs,
         youtube_dnn_batch_size=args.youtube_dnn_batch_size,
+        youtube_dnn_faiss_ivf_nlist=args.youtube_dnn_faiss_ivf_nlist,
+        youtube_dnn_faiss_ivf_nprobe=args.youtube_dnn_faiss_ivf_nprobe,
+        youtube_dnn_faiss_ivf_min_items=args.youtube_dnn_faiss_ivf_min_items,
     )
 
 
