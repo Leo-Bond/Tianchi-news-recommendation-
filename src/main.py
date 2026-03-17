@@ -6,7 +6,8 @@ python -m src.main --data_dir tcdata --output_dir output
 """
 
 import argparse
-
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 from src.multi_recall_ranking import build_baseline_submission
 
 
