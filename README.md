@@ -1,7 +1,9 @@
 # Tianchi News Recommendation
 
 Solution for the Tianchi News Recommendation task.
+
 Offline result: {'mrr@5': 0.2613946666666666, 'hit_rate@5': 0.4078, 'ndcg@5': 0.29785336858597583}
+
 Online result: 'mrr@5' = 0.269
 
 ## Overview
