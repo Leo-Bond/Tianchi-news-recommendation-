@@ -288,13 +288,16 @@ def build_baseline_submission(
 
     stage_start = time.time()
     all_click = pd.concat([train_df, test_df], ignore_index=True)
-    all_click.sort_values(["user_id", "click_timestamp"], inplace=True)
+    all_click.sort_values(["user_id", "click_timestamp"], inplace=True) # 两个点击文件合并后按时间排序
+
     item_embeddings = _build_item_embeddings(emb_df)
-    item_popularity, item_category, item_created_at = _build_item_meta(all_click, articles_df)
+    item_popularity, item_category, item_created_at = _build_item_meta(all_click, articles_df) # 计算物品的流行度、类别和创建时间等元信息
+    
     weights = _parse_weights(recall_weights)
     active_routes = _active_routes(weights)
     active_weights = [weight for _, weight in active_routes]
-    hot_items = _popular_items(all_click, popular_fill_k)
+
+    hot_items = _popular_items(all_click, popular_fill_k) # 点击数排名前k的热门文章列表，用于补全召回结果
     logger.info(
         "Active recall routes: %s",
         ", ".join("{}={:.3f}".format(name, weight) for name, weight in active_routes),
